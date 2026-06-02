@@ -1,51 +1,19 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { cn } from './lib/utils'
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
-
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <div className="min-h-screen bg-bg flex items-center justify-center">
+      <div className="glass rounded-2xl p-8 text-center animate-fade-in">
+        <h1 className="font-mono text-2xl font-bold text-accent mb-2">Claude Desktop</h1>
+        <p className="text-muted text-sm">Design system active</p>
+        <div className="mt-4 flex gap-2 justify-center">
+          <div className="w-3 h-3 rounded-full bg-accent animate-pulse-glow" />
+          <div className="w-3 h-3 rounded-full bg-accent opacity-60" />
+          <div className="w-3 h-3 rounded-full bg-accent opacity-30" />
+        </div>
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
-  );
+    </div>
+  )
 }
 
-export default App;
+export default App
