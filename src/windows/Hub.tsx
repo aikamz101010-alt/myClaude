@@ -183,112 +183,209 @@ function ProjectModal({ mode, onClose, onSubmit }: ProjectModalProps) {
 // ────────────────────────────────────────────────────────────────
 
 // ── Settings Modal ───────────────────────────────────────────────
+const PROFILE_PRESETS = [
+  '~/.bash_profile',
+  '~/.bashrc',
+  '~/.zshrc',
+  '~/.zprofile',
+  '~/.profile',
+]
+
 function SettingsModal({ onClose }: { onClose: () => void }) {
-  const { authStatus, claudeBinary } = useLibraryStore()
-  const [apiKey, setApiKey] = useState('')
-  const [profilePath, setProfilePath] = useState('~/.bash_profile')
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const { authStatus, claudeBinary, load: reloadLibrary } = useLibraryStore()
   const isAuthOk = authStatus.startsWith('✅')
 
-  const handleSave = async () => {
+  // Auth location state
+  const [editingLocation, setEditingLocation] = useState(false)
+  const [profilePath, setProfilePath] = useState('~/.bash_profile')
+  const [showPresets, setShowPresets] = useState(false)
+
+  // API key state
+  const [apiKey, setApiKey] = useState('')
+  const [showKey, setShowKey] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [feedback, setFeedback] = useState('')
+  const [reloading, setReloading] = useState(false)
+
+  const setFeedbackTemp = (msg: string) => {
+    setFeedback(msg)
+    setTimeout(() => setFeedback(''), 3000)
+  }
+
+  // Save API key → set in runtime + append to profile file
+  const handleSaveKey = async () => {
     if (!apiKey.trim()) return
     setSaving(true)
     try {
-      // Write export to the specified profile file
-      const expandedPath = profilePath.replace('~', '/Users/' + (claudeBinary?.split('/')[2] ?? ''))
-      await invoke('write_contract', {
-        contractPath: expandedPath.replace('~', String(await invoke('get_claude_binary')).split('/').slice(0,3).join('/')),
-        content: ''
-      }).catch(() => {})
-      // Use the key directly via env — reload auth
-      await invoke('set_api_key', { key: apiKey.trim() }).catch(() => {})
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
+      // 1. Apply immediately for this session
+      await invoke('set_api_key', { key: apiKey.trim() })
+
+      // 2. Append export line to chosen profile file
+      const expandedPath = profilePath.startsWith('~')
+        ? profilePath.replace('~', claudeBinary?.split('/').slice(0, 3).join('/') ?? '')
+        : profilePath
+
+      const existing = await invoke<string>('read_contract', { contractPath: expandedPath }).catch(() => '')
+      const exportLine = `\nexport ANTHROPIC_API_KEY="${apiKey.trim()}"\n`
+      if (!existing.includes(apiKey.trim())) {
+        await invoke('write_contract', {
+          contractPath: expandedPath,
+          content: existing + exportLine,
+        })
+      }
+
+      setFeedbackTemp('✅ Key saved — active immediately, persisted to profile')
+      setApiKey('')
+      await reloadLibrary()
+    } catch (e) {
+      setFeedbackTemp(`❌ ${String(e)}`)
     } finally {
       setSaving(false)
     }
   }
 
+  // Re-scan environment to pick up any changes
+  const handleReload = async () => {
+    setReloading(true)
+    await reloadLibrary()
+    setReloading(false)
+    setFeedbackTemp('🔄 Auth re-checked')
+  }
+
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in"
-      onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="glass rounded-2xl w-[480px] p-5 border border-white/10 shadow-2xl animate-slide-in">
+    <div
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="glass rounded-2xl w-[500px] p-5 border border-white/10 shadow-2xl animate-slide-in">
+        {/* Header */}
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2">
             <Settings className="w-4 h-4 text-accent" />
             <h2 className="text-sm font-mono font-bold text-text">Settings</h2>
           </div>
-          <button onClick={onClose} className="p-1.5 text-muted hover:text-text cursor-pointer rounded-lg hover:bg-surface2/50">
+          <button onClick={onClose} className="p-1.5 text-muted hover:text-text cursor-pointer rounded-lg hover:bg-surface2/50 transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Auth Status */}
-        <div className="mb-5 p-3 rounded-xl bg-surface2/50 border border-white/5">
-          <p className="text-xs font-mono font-semibold text-muted mb-2">Authentication Status</p>
+        {/* ── Auth Status ─────────────────────────── */}
+        <div className="mb-4 p-3 rounded-xl bg-surface2/50 border border-white/5">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-mono font-semibold text-muted">Authentication</p>
+            <button
+              onClick={handleReload}
+              className="flex items-center gap-1 text-xs font-mono text-muted hover:text-accent cursor-pointer transition-colors"
+            >
+              <RefreshCw className={cn('w-3 h-3', reloading && 'animate-spin')} />
+              Re-check
+            </button>
+          </div>
           <div className="flex items-center gap-2">
             {isAuthOk
               ? <CheckCircle className="w-4 h-4 text-accent flex-shrink-0" />
               : <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0" />}
-            <p className={`text-xs font-mono ${isAuthOk ? 'text-accent' : 'text-warning'}`}>
+            <p className={cn('text-xs font-mono', isAuthOk ? 'text-accent' : 'text-warning')}>
               {authStatus || 'Checking...'}
             </p>
           </div>
-          {!isAuthOk && (
-            <p className="text-xs text-muted mt-2 leading-relaxed">
-              Claude Desktop reads <span className="text-text font-mono">ANTHROPIC_API_KEY</span> from your shell profile.
-              Detected profiles: <span className="text-text font-mono">~/.bash_profile</span>, <span className="text-text font-mono">~/.zshrc</span>
+        </div>
+
+        {/* ── Auth Location ───────────────────────── */}
+        <div className="mb-4 p-3 rounded-xl bg-surface2/50 border border-white/5">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-mono font-semibold text-muted">Auth Location</p>
+            <button
+              onClick={() => { setEditingLocation(e => !e); setShowPresets(false) }}
+              className="flex items-center gap-1 text-xs font-mono text-accent hover:text-accent/80 cursor-pointer transition-colors"
+            >
+              {editingLocation ? 'Done' : 'Edit'}
+            </button>
+          </div>
+
+          {!editingLocation ? (
+            <p className="text-xs font-mono text-text">{profilePath}</p>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <input
+                  value={profilePath}
+                  onChange={e => setProfilePath(e.target.value)}
+                  placeholder="~/.bash_profile"
+                  className="flex-1 bg-surface2 rounded-lg px-3 py-2 text-xs font-mono text-text placeholder-muted focus:outline-none focus:ring-1 focus:ring-accent/50"
+                  autoFocus
+                />
+                <button
+                  onClick={() => setShowPresets(p => !p)}
+                  className="px-2 py-1.5 bg-surface rounded-lg text-xs font-mono text-muted hover:text-text cursor-pointer border border-white/10 transition-colors"
+                >
+                  Presets
+                </button>
+              </div>
+
+              {showPresets && (
+                <div className="bg-surface rounded-xl border border-white/10 overflow-hidden">
+                  {PROFILE_PRESETS.map(p => (
+                    <button
+                      key={p}
+                      onClick={() => { setProfilePath(p); setShowPresets(false) }}
+                      className={cn(
+                        'w-full text-left px-3 py-2 text-xs font-mono cursor-pointer transition-colors',
+                        profilePath === p ? 'bg-accent/10 text-accent' : 'text-muted hover:bg-surface2/50 hover:text-text'
+                      )}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <p className="text-xs text-muted/70 font-mono">
+                App reads <span className="text-text">ANTHROPIC_API_KEY</span> from this file on startup
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* ── API Key Entry ───────────────────────── */}
+        <div className="mb-4 p-3 rounded-xl bg-surface2/50 border border-white/5">
+          <p className="text-xs font-mono font-semibold text-muted mb-2">
+            {isAuthOk ? 'Update API Key' : 'Set API Key'}
+          </p>
+          <div className="flex gap-2 mb-2">
+            <input
+              value={apiKey}
+              onChange={e => setApiKey(e.target.value)}
+              type={showKey ? 'text' : 'password'}
+              placeholder="sk-ant-api03-..."
+              className="flex-1 bg-surface2 rounded-xl px-3 py-2.5 text-sm font-mono text-text placeholder-muted focus:outline-none focus:ring-1 focus:ring-accent/50"
+            />
+            <button
+              onClick={() => setShowKey(s => !s)}
+              className="px-3 py-2 rounded-lg text-xs font-mono text-muted hover:text-text cursor-pointer bg-surface2 border border-white/10 transition-colors flex-shrink-0"
+            >
+              {showKey ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          <button
+            onClick={handleSaveKey}
+            disabled={!apiKey.trim() || saving}
+            className="w-full py-2.5 rounded-xl text-xs font-mono font-semibold bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed glow-accent"
+          >
+            {saving ? 'Saving...' : `Save to ${profilePath}`}
+          </button>
+          {feedback && (
+            <p className="text-xs font-mono mt-2 text-center" style={{ color: feedback.startsWith('✅') ? '#22C55E' : '#EF4444' }}>
+              {feedback}
             </p>
           )}
         </div>
 
-        {/* Claude CLI */}
-        <div className="mb-5 p-3 rounded-xl bg-surface2/50 border border-white/5">
+        {/* ── Claude CLI Binary ───────────────────── */}
+        <div className="p-3 rounded-xl bg-surface2/30 border border-white/5">
           <p className="text-xs font-mono font-semibold text-muted mb-1">Claude CLI Binary</p>
           <p className="text-xs font-mono text-text break-all">
-            {claudeBinary ?? '❌ Not detected'}
-          </p>
-        </div>
-
-        {/* Manual API key entry if not detected */}
-        {!isAuthOk && (
-          <div className="mb-4">
-            <label className="text-xs font-mono text-muted block mb-1.5">
-              API Key <span className="text-muted/60">(saved to shell profile)</span>
-            </label>
-            <div className="flex gap-2 mb-2">
-              <input
-                value={profilePath}
-                onChange={e => setProfilePath(e.target.value)}
-                placeholder="~/.bash_profile"
-                className="w-40 bg-surface2 rounded-lg px-3 py-2 text-xs font-mono text-muted focus:outline-none focus:ring-1 focus:ring-accent/40 flex-shrink-0"
-              />
-              <input
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                type="password"
-                placeholder="sk-ant-api03-..."
-                className="flex-1 bg-surface2 rounded-xl px-3 py-2 text-sm font-mono text-text placeholder-muted focus:outline-none focus:ring-1 focus:ring-accent/50"
-              />
-            </div>
-            <button
-              onClick={handleSave}
-              disabled={!apiKey.trim() || saving}
-              className="w-full py-2 rounded-xl text-xs font-mono font-semibold bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors disabled:opacity-50"
-            >
-              {saved ? '✅ Saved — restart app to apply' : saving ? 'Saving...' : 'Save API Key to Profile'}
-            </button>
-          </div>
-        )}
-
-        <div className="p-3 rounded-xl bg-surface2/30 border border-white/5">
-          <p className="text-xs font-mono text-muted leading-relaxed">
-            <span className="text-text">Auto-detection order:</span><br/>
-            1. Current process environment<br/>
-            2. bash -l (sources ~/.bash_profile)<br/>
-            3. zsh -l (sources ~/.zprofile, ~/.zshrc)<br/>
-            4. Direct parse of all profile files
+            {claudeBinary ?? '❌ Not detected — install: npm i -g @anthropic-ai/claude-code'}
           </p>
         </div>
       </div>
