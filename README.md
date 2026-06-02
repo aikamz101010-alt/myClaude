@@ -25,20 +25,28 @@ Download the latest `.dmg` from the **[Releases page](https://github.com/aikamz1
 
 - **`Claude X_x.y.z_x64.dmg`** — macOS (Intel native; runs on Apple Silicon via Rosetta 2)
 
-### Install
+### Install on another Mac — step by step
 
-1. Open the `.dmg` and drag **Claude X** into **Applications**.
-2. First launch (the app is **not code-signed**), macOS Gatekeeper will block it. Do one of:
-   - **Right-click** `Claude X` → **Open** → click **Open** in the dialog, or
-   - **System Settings → Privacy & Security →** scroll down → **Open Anyway**, or
-   - Terminal: `xattr -cr "/Applications/Claude X.app"`
+**1. Install prerequisites** (the app drives the Claude Code CLI, so these must exist on the machine):
 
-   After opening once this way, future launches work normally.
+```bash
+# Node.js ≥ 18 must be installed first (https://nodejs.org)
+npm install -g @anthropic-ai/claude-code   # install Claude Code CLI
+claude                                       # run once and log in (Claude Max/Pro or API key)
+```
 
-### Prerequisites (on the machine running the app)
+**2. Install the app:** open the `.dmg` → drag **Claude X** into **Applications**.
 
-- **Claude Code CLI** installed and logged in — `npm install -g @anthropic-ai/claude-code` then run `claude` once to authenticate
-- **Node.js** ≥ 18 (the chat uses a Node sidecar with the Agent SDK)
+**3. First launch — bypass Gatekeeper** (the app is not notarized, so macOS blocks it once). Pick any one:
+- **Right-click** `Claude X` in Applications → **Open** → click **Open** in the dialog ✅ (easiest), or
+- **System Settings → Privacy & Security** → scroll down → **Open Anyway**, or
+- Terminal: `xattr -cr "/Applications/Claude X.app"`
+
+After opening once this way, double-click works normally afterward.
+
+**4. Apple Silicon (M1/M2/M3…):** this build is Intel (x64). On first launch macOS will offer to install **Rosetta 2** — click **Install**, then the app runs. (A native universal build can be produced from source — see below.)
+
+> **Fully frictionless install for everyone** (no Gatekeeper step) requires **Apple code signing + notarization** (Apple Developer account, $99/yr). Without it, the one-time right-click → Open is expected for unsigned apps.
 
 ---
 
