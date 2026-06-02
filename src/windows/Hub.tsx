@@ -200,7 +200,7 @@ function LocalLibraryPanel({ onRescan, scanning }: { onRescan: () => void; scann
   const active = tabData.find(t => t.key === tab)!
 
   return (
-    <div className="glass rounded-xl flex flex-col border border-white/5 overflow-hidden">
+    <div className="glass rounded-xl flex flex-col border border-white/5 overflow-hidden h-full">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/5">
         <span className="text-xs font-mono font-bold text-text">Local Machine</span>
@@ -388,14 +388,14 @@ export function Hub({ onOpenProject }: HubProps) {
         </div>
 
         {/* ── Right: Monitor + Local Library ─── */}
-        <div className="w-72 flex-shrink-0 flex flex-col gap-3 overflow-hidden">
-          {/* Agent Monitor */}
-          <div className="flex-shrink-0">
+        <div className="w-72 flex-shrink-0 flex flex-col gap-3 overflow-hidden h-full">
+          {/* Agent Monitor — fixed height max ~200px */}
+          <div className="flex-shrink-0 max-h-52 overflow-hidden">
             <GlobalMonitor agents={agentRows} />
           </div>
 
-          {/* Local Machine Library */}
-          <div className="flex-1 min-h-0">
+          {/* Local Machine Library — takes remaining height, scrollable inside */}
+          <div className="flex-1 min-h-0 overflow-hidden">
             <LocalLibraryPanel onRescan={handleRescan} scanning={scanning} />
           </div>
         </div>
