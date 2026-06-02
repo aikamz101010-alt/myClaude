@@ -157,10 +157,10 @@ export function ProjectWindow({ project, onBack }: Props) {
           <div className="flex-1 overflow-hidden">
             {tab === 'chat' && (
               isTerminalMode
-                ? <TerminalView projectId={project.id} />
+                ? <TerminalView projectId={project.id} workingDir={project.path} />
                 : <ChatView projectId={project.id} workingDir={project.path} />
             )}
-            {tab === 'terminal' && <TerminalView projectId={project.id} />}
+            {tab === 'terminal' && <TerminalView projectId={project.id} workingDir={project.path} />}
             {tab === 'contract' && (
               <ContractEditor contractPath={project.contract_path} />
             )}

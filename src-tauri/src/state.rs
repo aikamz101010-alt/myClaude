@@ -52,6 +52,8 @@ pub struct AppState {
     pub agents: RwLock<HashMap<String, AgentState>>,
     pub library: RwLock<Vec<SkillItem>>,
     pub claude_binary: RwLock<Option<String>>,
+    /// Env vars inherited from shell at startup (ANTHROPIC_API_KEY, etc.)
+    pub shell_env: RwLock<HashMap<String, String>>,
 }
 
 impl AppState {

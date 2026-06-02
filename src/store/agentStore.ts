@@ -7,9 +7,10 @@ interface AgentStore {
   statuses: Record<string, 'running' | 'idle' | 'error'>
   // One-shot chat via claude --print (no "Start" needed)
   chat: (projectId: string, message: string, workingDir: string) => Promise<void>
-  // Persistent agent session (for long tasks)
+  // Persistent agent session (for terminal view)
   spawnAgent: (projectId: string, workingDir: string) => Promise<void>
   stopAgent: (projectId: string) => Promise<void>
+  sendToAgent: (projectId: string, message: string) => Promise<void>
   clearOutput: (projectId: string) => void
   subscribeOutput: (projectId: string) => () => void
 }
@@ -45,6 +46,10 @@ export const useAgentStore = create<AgentStore>((set) => ({
   stopAgent: async (projectId) => {
     await invoke('stop_agent', { projectId })
     set((s) => ({ statuses: { ...s.statuses, [projectId]: 'idle' } }))
+  },
+
+  sendToAgent: async (projectId, message) => {
+    await invoke('send_to_agent', { projectId, message })
   },
 
   clearOutput: (projectId) => {

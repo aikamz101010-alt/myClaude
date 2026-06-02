@@ -5,8 +5,18 @@ use std::process::Stdio;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
+/// Build a Command pre-loaded with the captured shell environment.
+fn claude_cmd(binary: &str, state: &Arc<AppState>) -> std::process::Command {
+    let mut cmd = std::process::Command::new(binary);
+    let env = state.shell_env.read();
+    for (k, v) in env.iter() {
+        cmd.env(k, v);
+    }
+    cmd
+}
+
 /// One-shot chat: send message via `claude --print`, stream response back.
-/// No need to "Start Agent" first — works immediately.
+/// Uses the same auth as Claude Code CLI — no API key config needed.
 #[tauri::command]
 pub async fn chat_message(
     app: AppHandle,
@@ -19,13 +29,12 @@ pub async fn chat_message(
         .claude_binary
         .read()
         .clone()
-        .ok_or_else(|| "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code".to_string())?;
+        .ok_or_else(|| "Claude CLI not found. Run: npm install -g @anthropic-ai/claude-code".to_string())?;
 
-    // Signal "thinking" to frontend
     let _ = app.emit(&format!("agent:status:{}", project_id), "running");
-    let _ = app.emit(&format!("agent:output:{}", project_id), format!("\n> {}\n", message));
+    let _ = app.emit(&format!("agent:output:{}", project_id), format!("> {}", message));
 
-    let mut child = std::process::Command::new(&binary)
+    let mut child = claude_cmd(&binary, &state)
         .arg("--print")
         .current_dir(&working_dir)
         .stdin(Stdio::piped())
@@ -34,10 +43,9 @@ pub async fn chat_message(
         .spawn()
         .map_err(|e| format!("Failed to launch Claude CLI: {}", e))?;
 
-    // Write message to stdin then close it
+    // Write message then close stdin (sends EOF)
     if let Some(mut stdin) = child.stdin.take() {
         let _ = writeln!(stdin, "{}", message);
-        // stdin dropped here → EOF sent to claude
     }
 
     let stdout = child.stdout.take().expect("stdout");
@@ -47,22 +55,19 @@ pub async fn chat_message(
     let app_err = app.clone();
     let pid_err = pid.clone();
 
-    // Stream stdout
     let out_thread = std::thread::spawn(move || {
         use std::io::BufRead;
-        let reader = std::io::BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
             let _ = app_out.emit(&format!("agent:output:{}", pid), line);
         }
     });
 
-    // Stream stderr (claude CLI warnings/errors)
     let err_thread = std::thread::spawn(move || {
         use std::io::BufRead;
-        let reader = std::io::BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            if !line.trim().is_empty() {
-                let _ = app_err.emit(&format!("agent:output:{}", pid_err), format!("[stderr] {}", line));
+        for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+            let trimmed = line.trim().to_string();
+            if !trimmed.is_empty() && !trimmed.contains("Logging to") {
+                let _ = app_err.emit(&format!("agent:output:{}", pid_err), format!("[!] {}", trimmed));
             }
         }
     });
@@ -71,20 +76,22 @@ pub async fn chat_message(
     let _ = out_thread.join();
     let _ = err_thread.join();
 
-    // Signal done
     let _ = app.emit(&format!("agent:status:{}", project_id), "idle");
 
     if !status.success() {
-        let _ = app.emit(
-            &format!("agent:output:{}", project_id),
-            format!("\n[exit {}]", status.code().unwrap_or(-1)),
-        );
+        let code = status.code().unwrap_or(-1);
+        if code != 0 {
+            let _ = app.emit(
+                &format!("agent:output:{}", project_id),
+                format!("\n[exit {}]", code),
+            );
+        }
     }
 
     Ok(())
 }
 
-/// Spawn persistent Claude CLI session (for long-running agent tasks).
+/// Spawn persistent interactive Claude CLI session for the terminal view.
 #[tauri::command]
 pub async fn spawn_agent(
     app: AppHandle,
@@ -98,7 +105,11 @@ pub async fn spawn_agent(
         .read()
         .clone()
         .ok_or_else(|| "Claude CLI not found".to_string())?;
-    pm.spawn(app, project_id, binary, working_dir)
+
+    // Pass shell env to ProcessManager
+    let shell_env: Vec<(String, String)> = state.shell_env.read().clone().into_iter().collect();
+
+    pm.spawn_with_env(app, project_id, binary, working_dir, shell_env)
         .map_err(|e| e.to_string())
 }
 

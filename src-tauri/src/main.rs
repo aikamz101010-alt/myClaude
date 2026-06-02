@@ -12,6 +12,52 @@ use commands::{
 };
 use process::ProcessManager;
 use state::AppState;
+use std::collections::HashMap;
+
+/// Source the user's shell profile and capture env vars.
+/// This ensures ANTHROPIC_API_KEY and other Claude CLI vars are available
+/// even when the app is launched from Finder/Spotlight (no shell env).
+fn capture_shell_env() -> HashMap<String, String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let output = std::process::Command::new(&shell)
+        .args(["-l", "-c", "env"])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|line| {
+                    let mut parts = line.splitn(2, '=');
+                    let key = parts.next()?.to_string();
+                    let val = parts.next()?.to_string();
+                    // Only keep Claude / Anthropic / Node vars
+                    if key.starts_with("ANTHROPIC")
+                        || key.starts_with("CLAUDE")
+                        || key == "PATH"
+                        || key == "HOME"
+                        || key == "USER"
+                        || key == "NVM_DIR"
+                        || key == "NVM_BIN"
+                        || key == "NODE_PATH"
+                    {
+                        Some((key, val))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+        _ => {
+            // Fallback: use current process env
+            std::env::vars()
+                .filter(|(k, _)| {
+                    k.starts_with("ANTHROPIC") || k.starts_with("CLAUDE") || k == "PATH" || k == "HOME"
+                })
+                .collect()
+        }
+    }
+}
 
 fn main() {
     let app_state = AppState::new();
@@ -25,7 +71,11 @@ fn main() {
         .manage(app_state.clone())
         .manage(process_manager)
         .setup(move |_app| {
-            // Load persisted projects from disk
+            // Capture shell env (ANTHROPIC_API_KEY etc.) before anything else
+            let shell_env = capture_shell_env();
+            *app_state.shell_env.write() = shell_env;
+
+            // Load persisted projects
             let saved = commands::project::load_projects_from_disk();
             *app_state.projects.write() = saved;
 
