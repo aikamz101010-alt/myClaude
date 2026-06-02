@@ -9,6 +9,10 @@ pub struct Project {
     pub name: String,
     pub path: String,
     pub contract_path: String,
+    #[serde(default)]
+    pub created_at: u64,   // unix timestamp secs
+    #[serde(default)]
+    pub last_opened: u64,  // unix timestamp secs, 0 = never
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

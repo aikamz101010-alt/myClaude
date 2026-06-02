@@ -270,7 +270,7 @@ interface HubProps {
 }
 
 export function Hub({ onOpenProject }: HubProps) {
-  const { projects, load: loadProjects, create, remove } = useProjectStore()
+  const { projects, load: loadProjects, create, touch, remove } = useProjectStore()
   const { claudeBinary, load: loadLibrary, rescan } = useLibraryStore()
   const { statuses } = useAgentStore()
   const [scanning, setScanning] = useState(false)
@@ -378,7 +378,7 @@ export function Hub({ onOpenProject }: HubProps) {
                     key={p.id}
                     project={p}
                     agentCount={getAgentCount(p.id)}
-                    onOpen={() => onOpenProject(p)}
+                    onOpen={async () => { await touch(p.id); onOpenProject(p) }}
                     onDelete={() => remove(p.id)}
                   />
                 ))}

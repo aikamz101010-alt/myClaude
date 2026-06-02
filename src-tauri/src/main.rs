@@ -8,7 +8,7 @@ mod state;
 use commands::{
     agent::{send_to_agent, spawn_agent, stop_agent},
     library::{get_claude_binary, get_library, rescan_library},
-    project::{create_project, delete_project, get_projects, read_contract, write_contract},
+    project::{create_project, delete_project, get_projects, read_contract, touch_project, write_contract},
 };
 use process::ProcessManager;
 use state::AppState;
@@ -45,6 +45,7 @@ fn main() {
             get_projects,
             create_project,
             delete_project,
+            touch_project,
             read_contract,
             write_contract,
             get_library,
