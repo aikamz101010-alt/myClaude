@@ -2,6 +2,7 @@
 
 mod commands;
 mod process;
+mod pty_manager;
 mod scanner;
 mod state;
 
@@ -9,14 +10,15 @@ use commands::{
     agent::{chat_message, send_to_agent, spawn_agent, stop_agent},
     library::{get_claude_binary, get_library, rescan_library},
     project::{create_project, delete_project, get_projects, read_contract, touch_project, write_contract},
+    terminal::{is_pty_running, resize_pty, start_pty, stop_pty, write_pty},
 };
 use process::ProcessManager;
+use pty_manager::PtyManager;
 use state::AppState;
 use std::collections::HashMap;
 
-/// Source the user's shell profile and capture env vars.
-/// This ensures ANTHROPIC_API_KEY and other Claude CLI vars are available
-/// even when the app is launched from Finder/Spotlight (no shell env).
+/// Source the user's shell profile to capture env vars like ANTHROPIC_API_KEY.
+/// Needed when app is launched from Finder/Spotlight (no shell environment).
 fn capture_shell_env() -> HashMap<String, String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let output = std::process::Command::new(&shell)
@@ -31,15 +33,17 @@ fn capture_shell_env() -> HashMap<String, String> {
                     let mut parts = line.splitn(2, '=');
                     let key = parts.next()?.to_string();
                     let val = parts.next()?.to_string();
-                    // Only keep Claude / Anthropic / Node vars
                     if key.starts_with("ANTHROPIC")
                         || key.starts_with("CLAUDE")
                         || key == "PATH"
                         || key == "HOME"
                         || key == "USER"
+                        || key == "TERM"
                         || key == "NVM_DIR"
                         || key == "NVM_BIN"
                         || key == "NODE_PATH"
+                        || key == "LANG"
+                        || key == "LC_ALL"
                     {
                         Some((key, val))
                     } else {
@@ -48,20 +52,16 @@ fn capture_shell_env() -> HashMap<String, String> {
                 })
                 .collect()
         }
-        _ => {
-            // Fallback: use current process env
-            std::env::vars()
-                .filter(|(k, _)| {
-                    k.starts_with("ANTHROPIC") || k.starts_with("CLAUDE") || k == "PATH" || k == "HOME"
-                })
-                .collect()
-        }
+        _ => std::env::vars()
+            .filter(|(k, _)| k.starts_with("ANTHROPIC") || k.starts_with("CLAUDE") || k == "PATH" || k == "HOME")
+            .collect(),
     }
 }
 
 fn main() {
     let app_state = AppState::new();
     let process_manager = ProcessManager::new();
+    let pty_manager = PtyManager::new();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -70,8 +70,9 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state.clone())
         .manage(process_manager)
+        .manage(pty_manager)
         .setup(move |_app| {
-            // Capture shell env (ANTHROPIC_API_KEY etc.) before anything else
+            // Capture shell env (ANTHROPIC_API_KEY etc.)
             let shell_env = capture_shell_env();
             *app_state.shell_env.write() = shell_env;
 
@@ -92,19 +93,29 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Projects
             get_projects,
             create_project,
             delete_project,
             touch_project,
             read_contract,
             write_contract,
+            // Library
             get_library,
             rescan_library,
             get_claude_binary,
+            // Chat (claude --print)
             chat_message,
+            // Persistent agent session
             spawn_agent,
             send_to_agent,
             stop_agent,
+            // PTY terminal (real embedded claude CLI)
+            start_pty,
+            write_pty,
+            resize_pty,
+            stop_pty,
+            is_pty_running,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
