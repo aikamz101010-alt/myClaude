@@ -5,6 +5,7 @@ import { ChatView } from '@/components/project/ChatView'
 import { TerminalView } from '@/components/project/TerminalView'
 import { ContractEditor } from '@/components/project/ContractEditor'
 import { LibraryPanel } from '@/components/library/LibraryPanel'
+import { AddFromURL } from '@/components/library/AddFromURL'
 import { LocalMonitor } from '@/components/project/LocalMonitor'
 import { cn } from '@/lib/utils'
 import {
@@ -31,7 +32,7 @@ export function ProjectWindow({ project, onBack }: Props) {
   const [_contractItems, setContractItems] = useState<
     Record<string, Array<{ id: string; name: string; item_type: string }>>
   >({ skill: [], agent: [], mcp: [] })
-  const [_showAddURL, setShowAddURL] = useState(false)
+  const [showAddURL, setShowAddURL] = useState(false)
   const { spawnAgent, stopAgent, statuses, subscribeOutput } = useAgentStore()
   const status = statuses[project.id] ?? 'idle'
 
@@ -169,6 +170,9 @@ export function ProjectWindow({ project, onBack }: Props) {
 
         {/* Bottom monitor strip */}
         <LocalMonitor projectId={project.id} />
+
+        {/* AddFromURL modal */}
+        {showAddURL && <AddFromURL onClose={() => setShowAddURL(false)} />}
       </div>
     </DndContext>
   )

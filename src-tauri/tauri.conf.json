@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "claude-desktop-custom",
+  "productName": "Claude Desktop",
   "version": "0.1.0",
   "identifier": "com.ictpelindo4.claude-desktop-custom",
   "build": {
@@ -12,9 +12,16 @@
   "app": {
     "windows": [
       {
-        "title": "claude-desktop-custom",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "title": "Claude Desktop",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "center": true
       }
     ],
     "security": {
@@ -23,13 +30,17 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["dmg", "app"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": null
+    }
   }
 }

@@ -47,3 +47,30 @@ body {
 
 /* Prevent text selection on drag */
 [data-tauri-drag-region] { -webkit-app-region: drag; }
+
+/* macOS native titlebar overlay — content must have padding-top: 40px */
+.window-content {
+  padding-top: 40px;
+}
+
+/* Smooth window focus effect */
+body {
+  transition: opacity 0.1s ease;
+}
+
+/* Selection color matches accent */
+::selection {
+  background: rgba(34, 197, 94, 0.3);
+  color: #F8FAFC;
+}
+
+/* Prevent default macOS drag behavior on text */
+p, span, h1, h2, h3, h4 {
+  -webkit-user-drag: none;
+}
+
+/* Tauri drag region — prevent text selection */
+[data-tauri-drag-region] * {
+  -webkit-user-select: none;
+  user-select: none;
+}
