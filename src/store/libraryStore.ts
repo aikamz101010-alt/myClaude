@@ -32,7 +32,13 @@ export const useLibraryStore = create<LibraryStore>((set) => ({
     set({ items, claudeBinary, authStatus })
   },
   rescan: async () => {
+    // rescan_library also re-detects the binary as a side effect
     const items = await invoke<SkillItem[]>('rescan_library')
-    set({ items })
+    // Then refresh binary path and auth status in parallel
+    const [claudeBinary, authStatus] = await Promise.all([
+      invoke<string | null>('get_claude_binary'),
+      invoke<string>('get_auth_status'),
+    ])
+    set({ items, claudeBinary, authStatus })
   },
 }))

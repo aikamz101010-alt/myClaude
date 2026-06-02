@@ -5,10 +5,15 @@ import { GlobalMonitor } from '@/components/hub/GlobalMonitor'
 import { useProjectStore } from '@/store/projectStore'
 import { useLibraryStore } from '@/store/libraryStore'
 import { useAgentStore } from '@/store/agentStore'
+import { useSessionStore } from '@/store/sessionStore'
 import { cn } from '@/lib/utils'
-import { Plus, RefreshCw, Cpu, Terminal, FolderOpen, FolderInput, X, Settings, CheckCircle, AlertTriangle } from 'lucide-react'
+import { Plus, RefreshCw, Cpu, Terminal, FolderOpen, FolderInput, X, Settings, CheckCircle, AlertTriangle, Search } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import type { Project } from '@/store/projectStore'
+import type { SkillItem } from '@/store/libraryStore'
+import { ThemeToggle } from '@/components/ui/ThemeToggle'
+import { InstallModal } from '@/components/library/InstallModal'
+import { useTagColors, type TagType } from '@/lib/tagColors'
 
 // ── Project Modal (New + Open) ───────────────────────────────────
 type ModalMode = 'new' | 'open'
@@ -192,7 +197,7 @@ const PROFILE_PRESETS = [
 ]
 
 function SettingsModal({ onClose }: { onClose: () => void }) {
-  const { authStatus, claudeBinary, load: reloadLibrary } = useLibraryStore()
+  const { authStatus, claudeBinary: claudeBinaryForDisplay, load: reloadLibrary } = useLibraryStore()
   const isAuthOk = authStatus.startsWith('✅')
 
   // Auth location state
@@ -220,16 +225,12 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       // 1. Apply immediately for this session
       await invoke('set_api_key', { key: apiKey.trim() })
 
-      // 2. Append export line to chosen profile file
-      const expandedPath = profilePath.startsWith('~')
-        ? profilePath.replace('~', claudeBinary?.split('/').slice(0, 3).join('/') ?? '')
-        : profilePath
-
-      const existing = await invoke<string>('read_contract', { contractPath: expandedPath }).catch(() => '')
+      // 2. Append export line to profile file (backend expands ~ automatically)
+      const existing = await invoke<string>('read_contract', { contractPath: profilePath }).catch(() => '')
       const exportLine = `\nexport ANTHROPIC_API_KEY="${apiKey.trim()}"\n`
       if (!existing.includes(apiKey.trim())) {
         await invoke('write_contract', {
-          contractPath: expandedPath,
+          contractPath: profilePath,
           content: existing + exportLine,
         })
       }
@@ -385,7 +386,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
         <div className="p-3 rounded-xl bg-surface2/30 border border-white/5">
           <p className="text-xs font-mono font-semibold text-muted mb-1">Claude CLI Binary</p>
           <p className="text-xs font-mono text-text break-all">
-            {claudeBinary ?? '❌ Not detected — install: npm i -g @anthropic-ai/claude-code'}
+            {claudeBinaryForDisplay ?? '❌ Not detected — install: npm i -g @anthropic-ai/claude-code'}
           </p>
         </div>
       </div>
@@ -395,20 +396,31 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
 // ────────────────────────────────────────────────────────────────
 
 // ── LocalLibrary panel ──────────────────────────────────────────
-type LibTab = 'skill' | 'mcp' | 'agent'
+type LibTab = 'skill' | 'plugin' | 'agent'
 
 function LocalLibraryPanel({ onRescan, scanning }: { onRescan: () => void; scanning: boolean }) {
   const { items } = useLibraryStore()
-  const [tab, setTab] = useState<LibTab>('skill')
+  const [tab, setTab]           = useState<LibTab>('skill')
+  const [query, setQuery]       = useState('')
+  const [showInstall, setShowInstall] = useState(false)
 
-  const skills  = items.filter(i => i.item_type === 'skill')
-  const mcps    = items.filter(i => i.item_type === 'mcp')
-  const agents  = items.filter(i => i.item_type === 'agent')
+  const q = query.toLowerCase().trim()
 
-  const tabData: { key: LibTab; label: string; list: typeof items; icon: string }[] = [
-    { key: 'skill',  label: 'Skills',   list: skills,  icon: '⚡' },
-    { key: 'mcp',    label: 'Plugins',  list: mcps,    icon: '🔌' },
-    { key: 'agent',  label: 'Agents',   list: agents,  icon: '🤖' },
+  const applySearch = (list: typeof items) =>
+    q ? list.filter(i =>
+      i.name.toLowerCase().includes(q) ||
+      i.description.toLowerCase().includes(q) ||
+      i.model.toLowerCase().includes(q)
+    ) : list
+
+  const skills  = applySearch(items.filter(i => i.item_type === 'skill'))
+  const plugins = applySearch(items.filter(i => i.item_type === 'plugin' || i.item_type === 'mcp'))
+  const agents  = applySearch(items.filter(i => i.item_type === 'agent'))
+
+  const tabData: { key: LibTab; label: string; list: typeof items }[] = [
+    { key: 'skill',  label: 'Skills',  list: skills  },
+    { key: 'plugin', label: 'Plugins', list: plugins },
+    { key: 'agent',  label: 'Agents',  list: agents  },
   ]
   const active = tabData.find(t => t.key === tab)!
 
@@ -417,13 +429,59 @@ function LocalLibraryPanel({ onRescan, scanning }: { onRescan: () => void; scann
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/5">
         <span className="text-xs font-mono font-bold text-text">Local Machine</span>
-        <button
-          onClick={onRescan}
-          className="p-1 text-muted hover:text-accent cursor-pointer transition-colors rounded"
-          title="Re-scan"
-        >
-          <RefreshCw className={cn('w-3 h-3', scanning && 'animate-spin')} />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onRescan}
+            className={cn(
+              'flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-mono cursor-pointer transition-colors',
+              scanning ? 'text-accent' : 'text-muted hover:text-accent'
+            )}
+            title="Re-scan Claude CLI data"
+          >
+            <RefreshCw className={cn('w-3 h-3', scanning && 'animate-spin')} />
+            {scanning && <span>Scanning…</span>}
+          </button>
+          <button
+            onClick={() => setShowInstall(true)}
+            className="p-1 text-muted hover:text-accent cursor-pointer transition-colors rounded"
+            title="Add plugin / skill / agent"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {showInstall && (
+        <InstallModal
+          onClose={() => setShowInstall(false)}
+          onDone={() => { setShowInstall(false); onRescan() }}
+        />
+      )}
+
+      {/* Search */}
+      <div className="px-2 pt-2 pb-1">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted pointer-events-none" />
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Search skills, plugins, agents…"
+            className={cn(
+              'w-full bg-surface2/60 rounded-lg pl-7 pr-6 py-1.5',
+              'text-xs font-mono text-text placeholder-muted/60',
+              'focus:outline-none focus:ring-1 focus:ring-accent/40',
+              'transition-all duration-150',
+            )}
+          />
+          {query && (
+            <button
+              onClick={() => setQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-text cursor-pointer transition-colors"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Tab strip */}
@@ -435,50 +493,98 @@ function LocalLibraryPanel({ onRescan, scanning }: { onRescan: () => void; scann
             className={cn(
               'flex-1 py-1.5 text-xs font-mono cursor-pointer transition-colors',
               tab === t.key
-                ? 'text-accent border-b-2 border-accent'
+                ? 'text-accent border-b-2 border-accent bg-accent/5'
                 : 'text-muted hover:text-text',
             )}
           >
             {t.label}
-            <span className="ml-1 opacity-60">({t.list.length})</span>
+            <span className="ml-1 opacity-50">({t.list.length})</span>
           </button>
         ))}
       </div>
 
       {/* Items */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-1 min-h-0">
+      <div className="flex-1 overflow-y-auto p-2 space-y-0.5 min-h-0">
         {active.list.length === 0 ? (
-          <div className="flex items-center justify-center h-16">
-            <p className="text-xs text-muted font-mono">
-              No {active.label.toLowerCase()} detected
-            </p>
+          <div className="flex flex-col items-center justify-center h-20 gap-1">
+            {q ? (
+              <>
+                <p className="text-xs text-muted font-mono">No match for "{query}"</p>
+                <button onClick={() => setQuery('')} className="text-xs text-accent/70 font-mono cursor-pointer hover:text-accent">
+                  Clear search
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-muted font-mono">No {active.label.toLowerCase()} found</p>
+                <p className="text-xs text-muted/50 font-mono">Click ↻ to refresh</p>
+              </>
+            )}
           </div>
         ) : (
           active.list.map(item => (
-            <div
-              key={item.id}
-              className="flex items-start gap-2 px-2 py-1.5 rounded-lg hover:bg-surface2/60 transition-colors"
-            >
-              <span className="text-xs flex-shrink-0 mt-0.5">{active.icon}</span>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-mono text-text truncate">{item.name}</p>
-                {item.description && (
-                  <p className="text-xs text-muted truncate leading-tight">{item.description}</p>
-                )}
-                {/* Model badge for agents */}
-                {item.model && (
-                  <span className="inline-block mt-0.5 text-xs font-mono text-accent/70 bg-accent/10 px-1.5 py-0.5 rounded">
-                    {item.model.replace('claude-', '').replace('-latest', '')}
-                  </span>
-                )}
-              </div>
-              {/* Source badge */}
-              {item.version && item.version !== 'latest' && item.version !== 'plugin' && (
-                <span className="text-xs font-mono text-muted/40 flex-shrink-0">{item.version}</span>
-              )}
-            </div>
+            <LibraryItem key={item.id} item={item} tab={tab} />
           ))
         )}
+      </div>
+    </div>
+  )
+}
+
+function LibraryItem({ item, tab }: { item: SkillItem; tab: LibTab }) {
+  const TAG_COLORS = useTagColors()
+  const color = TAG_COLORS[(tab === 'plugin' ? 'plugin' : tab) as TagType]
+  return (
+    <div className="flex items-start gap-2 px-2 py-1.5 rounded-lg hover:bg-surface2/60 transition-colors group">
+      {/* Type dot + icon */}
+      <span className="flex items-center gap-1 flex-shrink-0 mt-0.5 leading-none">
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+        <span className="text-xs">
+          {tab === 'skill'  && '⚡'}
+          {tab === 'plugin' && (item.item_type === 'mcp' ? '🔌' : '📦')}
+          {tab === 'agent'  && '🤖'}
+        </span>
+      </span>
+
+      <div className="min-w-0 flex-1">
+        {/* Name */}
+        <p className="text-xs font-mono truncate leading-snug" style={{ color }}>{item.name}</p>
+
+        {/* Description */}
+        {item.description && (
+          <p className="text-xs text-muted/70 truncate leading-tight">{item.description}</p>
+        )}
+
+        {/* Badges row */}
+        <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+          {/* Plugin version */}
+          {tab === 'plugin' && item.version && (
+            <span className="text-xs font-mono text-muted/60 bg-surface2 px-1 rounded">
+              v{item.version}
+            </span>
+          )}
+          {/* Plugin publisher (stored in model field) */}
+          {tab === 'plugin' && item.model && (
+            <span className="text-xs font-mono text-muted/40 truncate max-w-[100px]">
+              {item.model}
+            </span>
+          )}
+          {/* Skill source: which plugin it came from */}
+          {tab === 'skill' && item.version && item.version !== 'personal' && (
+            <span className="text-xs font-mono text-muted/50 bg-surface2/60 px-1 rounded truncate max-w-[120px]">
+              {item.version}
+            </span>
+          )}
+          {tab === 'skill' && item.version === 'personal' && (
+            <span className="text-xs font-mono text-accent/50 bg-accent/5 px-1 rounded">personal</span>
+          )}
+          {/* Agent model */}
+          {tab === 'agent' && item.model && (
+            <span className="text-xs font-mono text-accent/60 bg-accent/10 px-1 rounded">
+              {item.model.replace('claude-', '').replace('-latest', '')}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -493,9 +599,20 @@ export function Hub({ onOpenProject }: HubProps) {
   const { projects, load: loadProjects, create, touch, remove } = useProjectStore()
   const { claudeBinary, authStatus, load: loadLibrary, rescan } = useLibraryStore()
   const { statuses } = useAgentStore()
+  const { chatsByProject, chats, ptyStatus } = useSessionStore()
+
+  // A project is "active" if it has a PTY session running OR any chat with messages
+  const isProjectActive = (projectId: string) => {
+    if (ptyStatus[projectId] === 'running') return true
+    const ids = chatsByProject[projectId] ?? []
+    return ids.some(id => (chats[id]?.messages.length ?? 0) > 0)
+  }
+
   const [scanning, setScanning] = useState(false)
   const [modal, setModal] = useState<'new' | 'open' | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [search, setSearch] = useState('')
+  const [sortBy, setSortBy] = useState<'added' | 'name' | 'activity'>('added')
   const isAuthOk = authStatus.startsWith('✅')
 
   useEffect(() => {
@@ -513,6 +630,19 @@ export function Hub({ onOpenProject }: HubProps) {
     setScanning(false)
   }
 
+  const searchedProjects = search.trim()
+    ? projects.filter(p =>
+        p.name.toLowerCase().includes(search.toLowerCase()) ||
+        p.path.toLowerCase().includes(search.toLowerCase())
+      )
+    : projects
+
+  const filteredProjects = [...searchedProjects].sort((a, b) => {
+    if (sortBy === 'name') return a.name.localeCompare(b.name)
+    if (sortBy === 'activity') return (b.last_opened ?? 0) - (a.last_opened ?? 0)
+    return (b.created_at ?? 0) - (a.created_at ?? 0) // added (default)
+  })
+
   const agentRows = Object.entries(statuses).map(([id, status]) => ({
     id,
     projectName: projects.find((p) => p.id === id)?.name ?? id,
@@ -522,8 +652,10 @@ export function Hub({ onOpenProject }: HubProps) {
     runtimeSecs: 0,
   }))
 
-  const getAgentCount = (projectId: string) =>
-    statuses[projectId] === 'running' ? 1 : 0
+  const getAgentCount = (projectId: string) => {
+    const legacy = statuses[projectId] === 'running' ? 1 : 0
+    return legacy + (isProjectActive(projectId) ? 1 : 0)
+  }
 
   return (
     <div className="flex flex-col h-screen bg-bg select-none overflow-hidden">
@@ -535,7 +667,7 @@ export function Hub({ onOpenProject }: HubProps) {
       >
         <div className="titlebar-no-drag flex items-center gap-3" style={{ marginLeft: 72 }}>
           <Terminal className="w-4 h-4 text-accent" />
-          <span className="font-mono text-sm font-bold text-text">Claude Desktop</span>
+          <span className="font-mono text-sm font-bold text-text">Claude X</span>
           <div className="flex items-center gap-1.5">
             <Cpu className="w-3 h-3 text-muted" />
             <span className="text-xs text-muted font-mono">
@@ -545,21 +677,25 @@ export function Hub({ onOpenProject }: HubProps) {
           </div>
         </div>
 
-        <div className="titlebar-no-drag flex items-center gap-1.5">
-          {/* Auth indicator */}
-          <button
-            onClick={() => setShowSettings(true)}
+        <div className="titlebar-no-drag flex items-center gap-2">
+          {/* Theme toggle */}
+          <ThemeToggle />
+
+          {/* Auth status badge */}
+          <div
             className={cn(
-              'flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono cursor-pointer transition-colors',
-              isAuthOk ? 'text-accent hover:bg-accent/10' : 'text-warning hover:bg-warning/10'
+              'flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono',
+              isAuthOk ? 'text-accent' : 'text-warning'
             )}
             title={authStatus}
           >
             {isAuthOk
-              ? <CheckCircle className="w-3.5 h-3.5" />
-              : <AlertTriangle className="w-3.5 h-3.5" />}
-            <span className="hidden sm:inline">{isAuthOk ? 'Authenticated' : 'Auth needed'}</span>
-          </button>
+              ? <CheckCircle className="w-3 h-3" />
+              : <AlertTriangle className="w-3 h-3" />}
+            <span className="hidden sm:inline text-xs">
+              {isAuthOk ? 'Auth OK' : 'No auth'}
+            </span>
+          </div>
 
           <button
             onClick={handleRescan}
@@ -584,12 +720,29 @@ export function Hub({ onOpenProject }: HubProps) {
 
         {/* ── Left: Projects ─────────────────── */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          <div className="flex items-center justify-between mb-3">
+          {/* Header row */}
+          <div className="flex items-center justify-between mb-2">
             <h1 className="text-sm font-mono font-bold text-text">
               Projects
-              <span className="ml-2 text-muted font-normal">({projects.length})</span>
+              <span className="ml-1.5 text-muted font-normal">
+                ({filteredProjects.length}{search ? `/${projects.length}` : ''})
+              </span>
             </h1>
             <div className="flex items-center gap-2">
+              {/* Sort selector */}
+              <div className="flex items-center gap-1 bg-surface2/60 rounded-lg p-0.5">
+                {([
+                  { v: 'added' as const,    label: 'Added'    },
+                  { v: 'activity' as const, label: 'Activity' },
+                  { v: 'name' as const,     label: 'Name'     },
+                ]).map(s => (
+                  <button key={s.v} onClick={() => setSortBy(s.v)}
+                    className={cn('px-2 py-1 rounded text-xs font-mono cursor-pointer transition-colors',
+                      sortBy === s.v ? 'bg-surface text-text' : 'text-muted hover:text-text')}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
               <button
                 onClick={() => setModal('open')}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold cursor-pointer transition-all bg-surface2 text-text hover:bg-surface border border-white/10"
@@ -600,9 +753,33 @@ export function Hub({ onOpenProject }: HubProps) {
                 onClick={() => setModal('new')}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold cursor-pointer transition-all bg-accent text-bg hover:bg-accent/90 glow-accent"
               >
-                <Plus className="w-3.5 h-3.5" /> New Project
+                <Plus className="w-3.5 h-3.5" /> New
               </button>
             </div>
+          </div>
+
+          {/* Search bar */}
+          <div className="relative mb-3">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted pointer-events-none" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search projects..."
+              className={cn(
+                'w-full bg-surface2/60 rounded-xl pl-8 pr-3 py-2',
+                'text-xs font-mono text-text placeholder-muted',
+                'focus:outline-none focus:ring-1 focus:ring-accent/40',
+                'transition-all duration-150',
+              )}
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted hover:text-text cursor-pointer transition-colors"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto">
@@ -618,9 +795,14 @@ export function Hub({ onOpenProject }: HubProps) {
                   </span>
                 </p>
               </div>
+            ) : filteredProjects.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 gap-2">
+                <Search className="w-8 h-8 text-muted/40" />
+                <p className="text-xs text-muted font-mono">No projects match "{search}"</p>
+              </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">
-                {projects.map((p) => (
+                {filteredProjects.map((p) => (
                   <ProjectCard
                     key={p.id}
                     project={p}

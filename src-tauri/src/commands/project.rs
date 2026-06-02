@@ -62,7 +62,7 @@ pub async fn create_project(
     let contract_path = format!("{}/CONTRACT.md", path);
     if !std::path::Path::new(&contract_path).exists() {
         let content = format!(
-            "---\nproject: {}\nversion: 1.0\n---\n\n# Allowed Skills\n\n# Active Agents\n\n# MCP Plugins\n\n# Custom Rules\n",
+            "---\nproject: {}\nversion: 1.0\n---\n\n# Allowed Skills\n\n# Active Agents\n\n# Plugins\n\n# Custom Rules\n",
             name
         );
         std::fs::write(&contract_path, &content).map_err(|e| e.to_string())?;
@@ -115,12 +115,69 @@ pub async fn delete_project(
     Ok(())
 }
 
+fn expand_tilde(path: &str) -> String {
+    if path.starts_with('~') {
+        if let Some(home) = home_dir() {
+            return home.join(&path[2..]).to_string_lossy().into_owned();
+        }
+    }
+    path.to_string()
+}
+
 #[tauri::command]
 pub async fn read_contract(contract_path: String) -> Result<String, String> {
-    std::fs::read_to_string(&contract_path).map_err(|e| e.to_string())
+    let path = expand_tilde(&contract_path);
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn write_contract(contract_path: String, content: String) -> Result<(), String> {
-    std::fs::write(&contract_path, content).map_err(|e| e.to_string())
+    let path = expand_tilde(&contract_path);
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+/// Read any text file (tilde-expanded).
+#[tauri::command]
+pub async fn read_file(path: String) -> Result<String, String> {
+    let p = expand_tilde(&path);
+    std::fs::read_to_string(&p).map_err(|e| e.to_string())
+}
+
+/// Write any text file (tilde-expanded).
+#[tauri::command]
+pub async fn write_file(path: String, content: String) -> Result<(), String> {
+    let p = expand_tilde(&path);
+    std::fs::write(&p, content).map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+/// List immediate children of a directory (lazy file tree).
+/// Directories first, then files, both alphabetical. Skips heavy/noisy dirs.
+#[tauri::command]
+pub async fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
+    const SKIP: &[&str] = &["node_modules", ".git", "target", "dist", ".next", ".cache", "build"];
+    let dir = expand_tilde(&path);
+    let read = std::fs::read_dir(&dir).map_err(|e| e.to_string())?;
+
+    let mut dirs: Vec<DirEntry> = vec![];
+    let mut files: Vec<DirEntry> = vec![];
+    for entry in read.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let is_dir = entry.path().is_dir();
+        if is_dir && SKIP.contains(&name.as_str()) {
+            continue;
+        }
+        let e = DirEntry { name, path: entry.path().to_string_lossy().into(), is_dir };
+        if is_dir { dirs.push(e) } else { files.push(e) }
+    }
+    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.extend(files);
+    Ok(dirs)
 }

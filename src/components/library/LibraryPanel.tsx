@@ -7,16 +7,20 @@ import { cn } from '@/lib/utils'
 type Tab = 'skill' | 'agent' | 'mcp'
 
 const tabs: { key: Tab; label: string }[] = [
-  { key: 'skill', label: 'Skills' },
-  { key: 'agent', label: 'Agents' },
-  { key: 'mcp',   label: 'MCP'    },
+  { key: 'skill', label: 'Skills'  },
+  { key: 'agent', label: 'Agents'  },
+  { key: 'mcp',   label: 'Plugins' },
 ]
+
+// The "Plugins" tab includes both plugin packages and MCP servers.
+const typesFor = (tab: Tab) => (tab === 'mcp' ? ['plugin', 'mcp'] : [tab])
 
 interface Props {
   onAddFromURL?: () => void
+  onItemClick?: (item: import('@/store/libraryStore').SkillItem) => void
 }
 
-export function LibraryPanel({ onAddFromURL }: Props) {
+export function LibraryPanel({ onAddFromURL, onItemClick }: Props) {
   const { items, rescan } = useLibraryStore()
   const [activeTab, setActiveTab] = useState<Tab>('skill')
   const [search, setSearch] = useState('')
@@ -24,12 +28,12 @@ export function LibraryPanel({ onAddFromURL }: Props) {
   const counts = {
     skill: items.filter((i) => i.item_type === 'skill').length,
     agent: items.filter((i) => i.item_type === 'agent').length,
-    mcp:   items.filter((i) => i.item_type === 'mcp').length,
+    mcp:   items.filter((i) => i.item_type === 'plugin' || i.item_type === 'mcp').length,
   }
 
   const filtered = items.filter(
     (i) =>
-      i.item_type === activeTab &&
+      typesFor(activeTab).includes(i.item_type) &&
       i.name.toLowerCase().includes(search.toLowerCase()),
   )
 
@@ -110,7 +114,7 @@ export function LibraryPanel({ onAddFromURL }: Props) {
             )}
           </div>
         ) : (
-          filtered.map((item) => <SkillCard key={item.id} item={item} />)
+          filtered.map((item) => <SkillCard key={item.id} item={item} onAdd={onItemClick} />)
         )}
       </div>
 

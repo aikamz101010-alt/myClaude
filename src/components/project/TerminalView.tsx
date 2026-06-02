@@ -5,22 +5,32 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { cn } from '@/lib/utils'
+import { RefreshCw, Square, Eraser, ZoomIn, ZoomOut } from 'lucide-react'
+import { useSessionStore } from '@/store/sessionStore'
 import '@xterm/xterm/css/xterm.css'
 
 interface Props {
   projectId: string
   workingDir: string
+  autoStart?: boolean
 }
 
-export function TerminalView({ projectId, workingDir }: Props) {
+const FONT_SIZES = [11, 12, 13, 14, 15, 16, 18]
+const DEFAULT_FONT_SIZE = 13
+
+export function TerminalView({ projectId, workingDir, autoStart = false }: Props) {
   const termRef    = useRef<HTMLDivElement>(null)
   const xtermRef   = useRef<Terminal | null>(null)
   const fitRef     = useRef<FitAddon | null>(null)
-  const [running, setRunning]   = useState(false)
-  const [loading, setLoading]   = useState(false)
-  const [error, setError]       = useState('')
+  const startedRef = useRef(false)
 
-  // Boot the terminal UI once
+  const [running, setRunning]   = useState(false)
+  const [error, setError]       = useState('')
+  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE)
+
+  const { setPtyStatus } = useSessionStore()
+
+  // ── Init xterm once ──────────────────────────────────────────
   useEffect(() => {
     if (!termRef.current) return
 
@@ -31,25 +41,17 @@ export function TerminalView({ projectId, workingDir }: Props) {
         cursor:              '#22C55E',
         cursorAccent:        '#0F172A',
         selectionBackground: 'rgba(34,197,94,0.25)',
-        black:               '#1E293B',
-        red:                 '#EF4444',
-        green:               '#22C55E',
-        yellow:              '#F59E0B',
-        blue:                '#3B82F6',
-        magenta:             '#A855F7',
-        cyan:                '#06B6D4',
-        white:               '#F8FAFC',
-        brightBlack:         '#334155',
-        brightGreen:         '#4ADE80',
-        brightWhite:         '#FFFFFF',
+        black:  '#1E293B', red:    '#EF4444', green:  '#22C55E',
+        yellow: '#F59E0B', blue:   '#3B82F6', magenta:'#A855F7',
+        cyan:   '#06B6D4', white:  '#F8FAFC',
+        brightBlack: '#334155', brightGreen: '#4ADE80', brightWhite: '#FFFFFF',
       },
-      fontFamily: "'Fira Code', 'Cascadia Code', 'Courier New', monospace",
-      fontSize:    13,
+      fontFamily:  "'Fira Code', 'Cascadia Code', monospace",
+      fontSize,
       lineHeight:  1.4,
       cursorBlink: true,
       cursorStyle: 'bar',
       scrollback:  10000,
-      allowProposedApi: true,
     })
 
     const fit   = new FitAddon()
@@ -62,38 +64,41 @@ export function TerminalView({ projectId, workingDir }: Props) {
     xtermRef.current = term
     fitRef.current   = fit
 
-    // Auto-resize
+    // Resize → notify PTY
     const ro = new ResizeObserver(() => {
       try {
         fit.fit()
-        const { cols, rows } = term
-        invoke('resize_pty', { projectId, cols, rows }).catch(() => {})
+        invoke('resize_pty', { projectId, cols: term.cols, rows: term.rows }).catch(() => {})
       } catch {}
     })
     ro.observe(termRef.current)
 
-    // Raw keystroke → PTY stdin
-    term.onData((data) => {
+    // Keystrokes → PTY stdin
+    term.onData(data => {
       invoke('write_pty', { projectId, data }).catch(console.error)
     })
 
-    // Subscribe to raw PTY output
-    const unlistenOutput = listen<string>(`pty:output:${projectId}`, (ev) => {
-      term.write(ev.payload)  // raw ANSI — NOT writeln
+    // PTY output
+    const unlistenOutput = listen<string>(`pty:output:${projectId}`, ev => {
+      term.write(ev.payload)
     })
 
-    // PTY session ended
+    // PTY exited
     const unlistenExit = listen(`pty:exit:${projectId}`, () => {
       setRunning(false)
-      term.writeln('\r\n\x1b[2m[session ended]\x1b[0m')
+      setPtyStatus(projectId, 'stopped')
+      term.writeln('\r\n\x1b[2m[session ended — click Restart to run again]\x1b[0m')
     })
 
-    // Welcome
-    term.writeln('\x1b[32m╔══════════════════════════════════════╗\x1b[0m')
-    term.writeln('\x1b[32m║     Claude Desktop — Terminal         ║\x1b[0m')
-    term.writeln('\x1b[32m╚══════════════════════════════════════╝\x1b[0m')
-    term.writeln('\x1b[2mPress \x1b[0m\x1b[32mStart\x1b[0m\x1b[2m to launch Claude Code CLI\x1b[0m')
-    term.writeln('')
+    // Check if PTY already running (reconnect after tab switch / back navigation)
+    invoke<boolean>('is_pty_running', { projectId }).then(alive => {
+      if (alive) {
+        setRunning(true)
+        term.writeln('\x1b[2m[reconnected to running session]\x1b[0m')
+        fit.fit()
+        invoke('resize_pty', { projectId, cols: term.cols, rows: term.rows }).catch(() => {})
+      }
+    }).catch(() => {})
 
     return () => {
       ro.disconnect()
@@ -101,69 +106,129 @@ export function TerminalView({ projectId, workingDir }: Props) {
       unlistenExit.then(fn => fn())
       term.dispose()
       xtermRef.current = null
+      // ── Session persistence: do NOT stop_pty here ──
+      // PTY keeps running when user navigates back to Hub
+      // or switches to Chat/Contract tab.
     }
   }, [projectId])
 
-  const handleStart = async () => {
-    if (!termRef.current || !xtermRef.current) return
-    setLoading(true)
+  // ── Font size change → update xterm ─────────────────────────
+  useEffect(() => {
+    if (xtermRef.current) {
+      xtermRef.current.options.fontSize = fontSize
+      fitRef.current?.fit()
+    }
+  }, [fontSize])
+
+  // ── Auto-start on mount ──────────────────────────────────────
+  useEffect(() => {
+    if (autoStart && !startedRef.current) {
+      startedRef.current = true
+      startClaude()
+    }
+    return () => { startedRef.current = false }
+  }, [autoStart, workingDir])
+
+  const startClaude = async () => {
+    if (!xtermRef.current) return
+    // Don't start if already alive
+    const alive = await invoke<boolean>('is_pty_running', { projectId }).catch(() => false)
+    if (alive) { setRunning(true); return }
     setError('')
     try {
       const { cols, rows } = xtermRef.current
       await invoke('start_pty', { projectId, workingDir, cols, rows })
       setRunning(true)
+      setPtyStatus(projectId, 'running')
       xtermRef.current.focus()
     } catch (err) {
       setError(String(err))
-    } finally {
-      setLoading(false)
+      xtermRef.current?.writeln(`\r\n\x1b[31m[Error] ${String(err)}\x1b[0m`)
     }
+  }
+
+  const handleRestart = async () => {
+    await invoke('stop_pty', { projectId }).catch(() => {})
+    setRunning(false)
+    setPtyStatus(projectId, 'stopped')
+    xtermRef.current?.writeln('\r\n\x1b[2m[restarting...]\x1b[0m')
+    await startClaude()
   }
 
   const handleStop = async () => {
     await invoke('stop_pty', { projectId })
     setRunning(false)
+    setPtyStatus(projectId, 'stopped')
+  }
+
+  const handleClear = () => {
+    xtermRef.current?.clear()
+    xtermRef.current?.focus()
+  }
+
+  const adjustFontSize = (delta: number) => {
+    setFontSize(prev => {
+      const idx = FONT_SIZES.indexOf(prev)
+      const nextIdx = Math.max(0, Math.min(FONT_SIZES.length - 1, idx + delta))
+      return FONT_SIZES[nextIdx]
+    })
   }
 
   return (
     <div className="flex flex-col h-full bg-[#0F172A]">
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-white/5 bg-[#1E293B] flex-shrink-0">
-        <div className={cn('w-2 h-2 rounded-full transition-colors', {
-          'bg-accent animate-pulse': running,
-          'bg-muted':                !running,
-        })} />
-        <span className="text-xs font-mono text-muted flex-1">
-          {running ? `claude — ${workingDir}` : 'Claude Code CLI — not running'}
+      <div className="flex items-center gap-1 px-3 py-1 border-b border-white/5 bg-[#1E293B] flex-shrink-0">
+        <div className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0 mr-1', running ? 'bg-accent animate-pulse' : 'bg-muted')} />
+        <span className="text-xs font-mono text-muted flex-1 truncate">
+          {running ? `claude — ${workingDir}` : 'claude — stopped'}
         </span>
 
         {error && (
-          <span className="text-xs font-mono text-error truncate max-w-xs">{error}</span>
+          <span className="text-xs font-mono text-error truncate max-w-xs" title={error}>
+            {error.length > 40 ? error.slice(0, 40) + '…' : error}
+          </span>
         )}
 
-        {running ? (
-          <button
-            onClick={handleStop}
-            className="px-3 py-1 rounded-lg text-xs font-mono bg-error/10 text-error hover:bg-error/20 border border-error/20 cursor-pointer transition-all"
-          >
-            Stop
+        {/* Font size controls */}
+        <div className="flex items-center border-r border-white/10 pr-1 mr-1">
+          <button onClick={() => adjustFontSize(-1)} disabled={fontSize <= FONT_SIZES[0]}
+            className="p-1 text-muted hover:text-text cursor-pointer transition-colors disabled:opacity-30" title="Decrease font size">
+            <ZoomOut className="w-3 h-3" />
           </button>
+          <span className="text-xs font-mono text-muted w-5 text-center">{fontSize}</span>
+          <button onClick={() => adjustFontSize(1)} disabled={fontSize >= FONT_SIZES[FONT_SIZES.length - 1]}
+            className="p-1 text-muted hover:text-text cursor-pointer transition-colors disabled:opacity-30" title="Increase font size">
+            <ZoomIn className="w-3 h-3" />
+          </button>
+        </div>
+
+        {/* Clear */}
+        <button onClick={handleClear} className="p-1 text-muted hover:text-text cursor-pointer transition-colors" title="Clear terminal">
+          <Eraser className="w-3 h-3" />
+        </button>
+
+        {running ? (
+          <>
+            <button onClick={handleRestart} className="p-1 text-muted hover:text-accent cursor-pointer transition-colors" title="Restart">
+              <RefreshCw className="w-3 h-3" />
+            </button>
+            <button onClick={handleStop} className="flex items-center gap-1 px-2 py-0.5 text-xs font-mono text-error hover:text-error/80 cursor-pointer transition-colors">
+              <Square className="w-3 h-3" /> Stop
+            </button>
+          </>
         ) : (
-          <button
-            onClick={handleStart}
-            disabled={loading}
-            className="px-3 py-1 rounded-lg text-xs font-mono bg-accent/10 text-accent hover:bg-accent hover:text-bg border border-accent/20 cursor-pointer transition-all disabled:opacity-50"
-          >
-            {loading ? 'Starting...' : 'Start'}
+          <button onClick={startClaude}
+            className="px-3 py-0.5 rounded text-xs font-mono bg-accent/10 text-accent hover:bg-accent hover:text-bg border border-accent/20 cursor-pointer transition-all">
+            Start claude
           </button>
         )}
       </div>
 
-      {/* xterm.js — the real embedded Claude CLI */}
+      {/* xterm.js */}
       <div
         ref={termRef}
         className="flex-1 overflow-hidden"
-        style={{ padding: '8px' }}
+        style={{ padding: '6px' }}
         onClick={() => xtermRef.current?.focus()}
       />
     </div>

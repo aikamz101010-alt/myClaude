@@ -33,4 +33,5 @@ uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
 parking_lot = "0.12"
 portable-pty = "0.9.0"
+scopeguard = "1"
 

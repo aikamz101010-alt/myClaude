@@ -64,20 +64,18 @@ impl PtyManager {
         let pid = project_id.clone();
         let app_handle = app.clone();
 
-        // Stream raw PTY output to frontend
+        // Stream raw PTY output to frontend (xterm.js handles ANSI)
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        // Send raw bytes as UTF-8 string (xterm.js handles ANSI)
                         let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                        let _ = app_handle.emit(&format!("pty:output:{}", pid), data);
+                        let _ = app_handle.emit(&format!("pty:output:{}", pid), &data);
                     }
                 }
             }
-            // Session ended
             let _ = app_handle.emit(&format!("pty:exit:{}", pid), ());
         });
 

@@ -3,15 +3,16 @@ export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
+      // Colors defined as RGB channels so opacity modifiers (bg-bg/50) still work
       colors: {
-        bg:       "#0F172A",
-        surface:  "#1E293B",
-        surface2: "#334155",
-        accent:   "#22C55E",
-        text:     "#F8FAFC",
-        muted:    "#94A3B8",
-        error:    "#EF4444",
-        warning:  "#F59E0B",
+        bg:       'rgb(var(--color-bg) / <alpha-value>)',
+        surface:  'rgb(var(--color-surface) / <alpha-value>)',
+        surface2: 'rgb(var(--color-surface2) / <alpha-value>)',
+        accent:   'rgb(var(--color-accent) / <alpha-value>)',
+        text:     'rgb(var(--color-text) / <alpha-value>)',
+        muted:    'rgb(var(--color-muted) / <alpha-value>)',
+        error:    'rgb(var(--color-error) / <alpha-value>)',
+        warning:  'rgb(var(--color-warning) / <alpha-value>)',
       },
       fontFamily: {
         mono: ["'Fira Code'", "monospace"],

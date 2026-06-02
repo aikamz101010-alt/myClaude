@@ -3,74 +3,104 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; }
+/* ── Dark theme (default) ──────────────────────────────────────── */
+:root, .theme-dark {
+  color-scheme: dark;
+  --color-bg:       15  23  42;    /* #0F172A */
+  --color-surface:  30  41  59;    /* #1E293B */
+  --color-surface2: 51  65  85;    /* #334155 */
+  --color-accent:   34  197 94;    /* #22C55E */
+  --color-text:     248 250 252;   /* #F8FAFC */
+  --color-muted:    148 163 184;   /* #94A3B8 */
+  --color-error:    239 68  68;    /* #EF4444 */
+  --color-warning:  245 158 11;    /* #F59E0B */
 
+  --glass-bg:     rgba(30, 41, 59, 0.8);
+  --glass-border: rgba(255, 255, 255, 0.08);
+}
+
+/* ── Light theme ───────────────────────────────────────────────── */
+.theme-light {
+  color-scheme: light;
+  --color-bg:       226 230 235;   /* #E2E6EB — soft gray, not bright white */
+  --color-surface:  216 221 228;   /* #D8DDE4 */
+  --color-surface2: 203 210 219;   /* #CBD2DB */
+  --color-accent:   22  163 74;    /* #16A34A */
+  --color-text:     30  41  59;    /* #1E293B */
+  --color-muted:    90  103 124;   /* #5A677C */
+  --color-error:    220 38  38;    /* #DC2626 */
+  --color-warning:  180 100 5;     /* #B46405 */
+
+  --glass-bg:     rgba(216, 221, 228, 0.85);
+  --glass-border: rgba(0, 0, 0, 0.10);
+}
+
+/* ── Base ──────────────────────────────────────────────────────── */
 * { box-sizing: border-box; }
 
 body {
-  background: #0F172A;
-  color: #F8FAFC;
+  background: rgb(var(--color-bg));
+  color: rgb(var(--color-text));
   font-family: 'Fira Sans', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   user-select: none;
   margin: 0;
   padding: 0;
+  transition: background 0.2s ease, color 0.2s ease;
 }
 
-/* Glassmorphism panel utility */
+/* ── Glassmorphism panel ───────────────────────────────────────── */
 .glass {
-  background: rgba(30, 41, 59, 0.8);
+  background: var(--glass-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--glass-border);
 }
 
-/* Accent glow utility */
+/* ── Accent glow ───────────────────────────────────────────────── */
 .glow-accent {
-  box-shadow: 0 0 12px rgba(34, 197, 94, 0.4);
+  box-shadow: 0 0 12px rgb(var(--color-accent) / 0.4);
 }
-
 .glow-accent:hover {
-  box-shadow: 0 0 20px rgba(34, 197, 94, 0.6);
+  box-shadow: 0 0 20px rgb(var(--color-accent) / 0.6);
 }
 
-/* Custom scrollbar */
+/* ── Scrollbar ─────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: #475569; }
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-surface2));
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-muted) / 0.6);
+}
 
-/* macOS titlebar drag region */
-.titlebar-drag { -webkit-app-region: drag; }
+/* ── macOS titlebar ────────────────────────────────────────────── */
+.titlebar-drag    { -webkit-app-region: drag; }
 .titlebar-no-drag { -webkit-app-region: no-drag; }
-
-/* Prevent text selection on drag */
 [data-tauri-drag-region] { -webkit-app-region: drag; }
 
-/* macOS native titlebar overlay — content must have padding-top: 40px */
-.window-content {
-  padding-top: 40px;
-}
-
-/* Smooth window focus effect */
-body {
-  transition: opacity 0.1s ease;
-}
-
-/* Selection color matches accent */
+/* ── Selection ─────────────────────────────────────────────────── */
 ::selection {
-  background: rgba(34, 197, 94, 0.3);
-  color: #F8FAFC;
+  background: rgb(var(--color-accent) / 0.3);
+  color: rgb(var(--color-text));
 }
 
-/* Prevent default macOS drag behavior on text */
-p, span, h1, h2, h3, h4 {
-  -webkit-user-drag: none;
-}
-
-/* Tauri drag region — prevent text selection */
+/* ── Prevent macOS text drag ───────────────────────────────────── */
+p, span, h1, h2, h3, h4 { -webkit-user-drag: none; }
 [data-tauri-drag-region] * {
   -webkit-user-select: none;
   user-select: none;
 }
+
+/* ── Theme transition on html ──────────────────────────────────── */
+html {
+  transition: background-color 0.2s ease;
+}
+
+/* ── Light mode border overrides ───────────────────────────────── */
+.theme-light .border-white\/5  { border-color: rgba(0,0,0,0.07); }
+.theme-light .border-white\/10 { border-color: rgba(0,0,0,0.10); }
+.theme-light .border-white\/20 { border-color: rgba(0,0,0,0.15); }

@@ -91,7 +91,7 @@ impl ProcessManager {
         Ok(())
     }
 
-    /// Legacy spawn (no extra env — kept for compatibility)
+    #[allow(dead_code)]
     pub fn spawn(
         self: &Arc<Self>,
         app: AppHandle,
@@ -120,6 +120,7 @@ impl ProcessManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_running(&self, project_id: &str) -> bool {
         let mut procs = self.processes.lock();
         if let Some(proc) = procs.get_mut(project_id) {

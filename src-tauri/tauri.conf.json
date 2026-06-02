@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Claude Desktop",
+  "productName": "Claude X",
   "version": "0.1.0",
   "identifier": "com.ictpelindo4.claude-desktop-custom",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Claude Desktop",
+        "title": "Claude X",
         "width": 1280,
         "height": 820,
         "minWidth": 900,
@@ -38,6 +38,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../sidecar/agent.mjs": "sidecar/agent.mjs",
+      "../node_modules/@anthropic-ai/claude-agent-sdk": "sidecar/node_modules/@anthropic-ai/claude-agent-sdk"
+    },
     "macOS": {
       "minimumSystemVersion": "11.0",
       "signingIdentity": null

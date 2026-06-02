@@ -4,16 +4,23 @@ mod commands;
 mod process;
 mod pty_manager;
 mod scanner;
+mod sidecar_manager;
 mod state;
 
 use commands::{
-    agent::{chat_message, send_to_agent, spawn_agent, stop_agent},
-    library::{get_auth_status, get_claude_binary, get_library, launch_claude_login, rescan_library, set_api_key},
-    project::{create_project, delete_project, get_projects, read_contract, touch_project, write_contract},
+    agent::{chat_message, interrupt_chat, respond_permission, send_chat_stream, send_to_agent, spawn_agent, stop_agent},
+    session::{get_session_history, list_project_sessions},
+    library::{
+        add_marketplace, create_agent, ensure_lead_orchestrator, get_auth_status, get_claude_binary,
+        get_library, init_skill, install_github_skill, install_plugin,
+        launch_claude_login, list_github_skills, rescan_library, set_api_key,
+    },
+    project::{create_project, delete_project, get_projects, list_directory, read_contract, read_file, touch_project, write_contract, write_file},
     terminal::{is_pty_running, resize_pty, start_pty, stop_pty, write_pty},
 };
 use process::ProcessManager;
 use pty_manager::PtyManager;
+use sidecar_manager::SidecarManager;
 use state::AppState;
 use std::collections::HashMap;
 
@@ -107,6 +114,7 @@ fn main() {
     let app_state = AppState::new();
     let process_manager = ProcessManager::new();
     let pty_manager = PtyManager::new();
+    let sidecar_manager = SidecarManager::new();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -116,10 +124,11 @@ fn main() {
         .manage(app_state.clone())
         .manage(process_manager)
         .manage(pty_manager)
+        .manage(sidecar_manager.clone())
         .setup(move |_app| {
             // Capture shell env (ANTHROPIC_API_KEY etc.)
             let shell_env = capture_shell_env();
-            *app_state.shell_env.write() = shell_env;
+            *app_state.shell_env.write() = shell_env.clone();
 
             // Load persisted projects
             let saved = commands::project::load_projects_from_disk();
@@ -127,7 +136,13 @@ fn main() {
 
             // Detect Claude CLI binary
             let binary = scanner::detect_claude_binary();
-            *app_state.claude_binary.write() = binary;
+            *app_state.claude_binary.write() = binary.clone();
+
+            // Configure Agent SDK sidecar (Node + script + claude path + env)
+            let node = sidecar_manager::detect_node_binary();
+            let script = sidecar_manager::detect_sidecar_script();
+            let env_vec: Vec<(String, String)> = shell_env.into_iter().collect();
+            sidecar_manager.configure(node, script, binary, env_vec);
 
             // Scan library in background
             let state_clone = app_state.clone();
@@ -145,6 +160,9 @@ fn main() {
             touch_project,
             read_contract,
             write_contract,
+            list_directory,
+            read_file,
+            write_file,
             // Library
             get_library,
             rescan_library,
@@ -152,8 +170,24 @@ fn main() {
             get_auth_status,
             set_api_key,
             launch_claude_login,
-            // Chat (claude --print)
+            // Plugin / skill / agent management
+            install_plugin,
+            add_marketplace,
+            init_skill,
+            create_agent,
+            ensure_lead_orchestrator,
+            // GitHub skill install
+            list_github_skills,
+            install_github_skill,
+            // Session history
+            get_session_history,
+            list_project_sessions,
+            // Chat (claude --print, legacy)
             chat_message,
+            // Chat via Agent SDK sidecar
+            send_chat_stream,
+            respond_permission,
+            interrupt_chat,
             // Persistent agent session
             spawn_agent,
             send_to_agent,
