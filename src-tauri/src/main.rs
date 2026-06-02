@@ -25,7 +25,11 @@ fn main() {
         .manage(app_state.clone())
         .manage(process_manager)
         .setup(move |_app| {
-            // Detect Claude CLI binary on startup
+            // Load persisted projects from disk
+            let saved = commands::project::load_projects_from_disk();
+            *app_state.projects.write() = saved;
+
+            // Detect Claude CLI binary
             let binary = scanner::detect_claude_binary();
             *app_state.claude_binary.write() = binary;
 

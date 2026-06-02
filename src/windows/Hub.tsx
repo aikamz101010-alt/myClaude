@@ -181,6 +181,90 @@ function ProjectModal({ mode, onClose, onSubmit }: ProjectModalProps) {
 }
 // ────────────────────────────────────────────────────────────────
 
+// ── LocalLibrary panel ──────────────────────────────────────────
+type LibTab = 'skill' | 'mcp' | 'agent'
+
+function LocalLibraryPanel({ onRescan, scanning }: { onRescan: () => void; scanning: boolean }) {
+  const { items } = useLibraryStore()
+  const [tab, setTab] = useState<LibTab>('skill')
+
+  const skills  = items.filter(i => i.item_type === 'skill')
+  const mcps    = items.filter(i => i.item_type === 'mcp')
+  const agents  = items.filter(i => i.item_type === 'agent')
+
+  const tabData: { key: LibTab; label: string; list: typeof items; icon: string }[] = [
+    { key: 'skill',  label: 'Skills',   list: skills,  icon: '⚡' },
+    { key: 'mcp',    label: 'Plugins',  list: mcps,    icon: '🔌' },
+    { key: 'agent',  label: 'Agents',   list: agents,  icon: '🤖' },
+  ]
+  const active = tabData.find(t => t.key === tab)!
+
+  return (
+    <div className="glass rounded-xl flex flex-col border border-white/5 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/5">
+        <span className="text-xs font-mono font-bold text-text">Local Machine</span>
+        <button
+          onClick={onRescan}
+          className="p-1 text-muted hover:text-accent cursor-pointer transition-colors rounded"
+          title="Re-scan"
+        >
+          <RefreshCw className={cn('w-3 h-3', scanning && 'animate-spin')} />
+        </button>
+      </div>
+
+      {/* Tab strip */}
+      <div className="flex border-b border-white/5">
+        {tabData.map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={cn(
+              'flex-1 py-1.5 text-xs font-mono cursor-pointer transition-colors',
+              tab === t.key
+                ? 'text-accent border-b-2 border-accent'
+                : 'text-muted hover:text-text',
+            )}
+          >
+            {t.label}
+            <span className="ml-1 opacity-60">({t.list.length})</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Items */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-1 min-h-0">
+        {active.list.length === 0 ? (
+          <div className="flex items-center justify-center h-16">
+            <p className="text-xs text-muted font-mono">
+              No {active.label.toLowerCase()} detected
+            </p>
+          </div>
+        ) : (
+          active.list.map(item => (
+            <div
+              key={item.id}
+              className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-surface2/60 transition-colors group"
+            >
+              <span className="text-xs flex-shrink-0">{active.icon}</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-mono text-text truncate">{item.name}</p>
+                {item.description && (
+                  <p className="text-xs text-muted truncate leading-tight">{item.description}</p>
+                )}
+              </div>
+              {item.version && item.version !== 'latest' && (
+                <span className="text-xs font-mono text-muted/50 flex-shrink-0">{item.version}</span>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+// ────────────────────────────────────────────────────────────────
+
 interface HubProps {
   onOpenProject: (project: Project) => void
 }
@@ -207,7 +291,6 @@ export function Hub({ onOpenProject }: HubProps) {
     setScanning(false)
   }
 
-  // Build agent rows from store statuses
   const agentRows = Object.entries(statuses).map(([id, status]) => ({
     id,
     projectName: projects.find((p) => p.id === id)?.name ?? id,
@@ -228,7 +311,6 @@ export function Hub({ onOpenProject }: HubProps) {
         style={{ height: 40 }}
         data-tauri-drag-region
       >
-        {/* Traffic lights space (macOS puts them at ~70px) */}
         <div className="titlebar-no-drag flex items-center gap-3" style={{ marginLeft: 72 }}>
           <Terminal className="w-4 h-4 text-accent" />
           <span className="font-mono text-sm font-bold text-text">Claude Desktop</span>
@@ -237,9 +319,7 @@ export function Hub({ onOpenProject }: HubProps) {
             <span className="text-xs text-muted font-mono">
               {claudeBinary ? 'CLI ready' : 'CLI not detected'}
             </span>
-            {claudeBinary && (
-              <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-            )}
+            {claudeBinary && <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />}
           </div>
         </div>
 
@@ -247,10 +327,8 @@ export function Hub({ onOpenProject }: HubProps) {
           <button
             onClick={() => setModal('open')}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono text-muted hover:text-text cursor-pointer transition-colors hover:bg-surface2/50"
-            title="Open existing project"
           >
-            <FolderInput className="w-3.5 h-3.5" />
-            Open
+            <FolderInput className="w-3.5 h-3.5" /> Open
           </button>
           <button
             onClick={handleRescan}
@@ -262,57 +340,64 @@ export function Hub({ onOpenProject }: HubProps) {
         </div>
       </div>
 
-      {/* Main content */}
-      <div className="flex flex-1 gap-4 p-4 overflow-hidden">
-        {/* Projects grid — scrollable */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="flex items-center justify-between mb-4">
+      {/* Main content: projects + right panel */}
+      <div className="flex flex-1 gap-3 p-3 overflow-hidden">
+
+        {/* ── Left: Projects ─────────────────── */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between mb-3">
             <h1 className="text-sm font-mono font-bold text-text">
               Projects
               <span className="ml-2 text-muted font-normal">({projects.length})</span>
             </h1>
             <button
               onClick={() => setModal('new')}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg',
-                'text-xs font-mono font-semibold cursor-pointer transition-all duration-200',
-                'bg-accent text-bg hover:bg-accent/90 glow-accent',
-              )}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold cursor-pointer transition-all bg-accent text-bg hover:bg-accent/90 glow-accent"
             >
-              <Plus className="w-3.5 h-3.5" />
-              New Project
+              <Plus className="w-3.5 h-3.5" /> New Project
             </button>
           </div>
 
-          {projects.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-48 gap-3">
-              <div className="w-12 h-12 rounded-xl bg-surface flex items-center justify-center border border-white/5">
-                <Plus className="w-6 h-6 text-muted" />
+          <div className="flex-1 overflow-y-auto">
+            {projects.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 gap-3">
+                <div className="w-12 h-12 rounded-xl bg-surface flex items-center justify-center border border-white/5">
+                  <Plus className="w-6 h-6 text-muted" />
+                </div>
+                <p className="text-sm text-muted font-mono text-center">
+                  No projects yet.<br />
+                  <span className="text-accent cursor-pointer" onClick={() => setModal('new')}>
+                    Create your first project
+                  </span>
+                </p>
               </div>
-              <p className="text-sm text-muted font-mono text-center">
-                No projects yet.
-                <br />
-                <span className="text-accent">Create your first project</span> to get started.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-3">
-              {projects.map((p) => (
-                <ProjectCard
-                  key={p.id}
-                  project={p}
-                  agentCount={getAgentCount(p.id)}
-                  onOpen={() => onOpenProject(p)}
-                  onDelete={() => remove(p.id)}
-                />
-              ))}
-            </div>
-          )}
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {projects.map((p) => (
+                  <ProjectCard
+                    key={p.id}
+                    project={p}
+                    agentCount={getAgentCount(p.id)}
+                    onOpen={() => onOpenProject(p)}
+                    onDelete={() => remove(p.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Right: Global Monitor (fixed width) */}
-        <div className="w-72 flex-shrink-0">
-          <GlobalMonitor agents={agentRows} />
+        {/* ── Right: Monitor + Local Library ─── */}
+        <div className="w-72 flex-shrink-0 flex flex-col gap-3 overflow-hidden">
+          {/* Agent Monitor */}
+          <div className="flex-shrink-0">
+            <GlobalMonitor agents={agentRows} />
+          </div>
+
+          {/* Local Machine Library */}
+          <div className="flex-1 min-h-0">
+            <LocalLibraryPanel onRescan={handleRescan} scanning={scanning} />
+          </div>
         </div>
       </div>
 
@@ -325,19 +410,19 @@ export function Hub({ onOpenProject }: HubProps) {
         />
       )}
 
-      {/* Footer stats bar */}
-      <div className="border-t border-white/5 px-4 py-2 flex items-center gap-4">
+      {/* Footer */}
+      <div className="border-t border-white/5 px-4 py-1.5 flex items-center gap-3">
         <span className="text-xs font-mono text-muted">
           {projects.length} project{projects.length !== 1 ? 's' : ''}
         </span>
-        <span className="text-xs font-mono text-muted">·</span>
+        <span className="text-xs text-muted">·</span>
         <span className="text-xs font-mono text-muted">
-          {agentRows.filter((a) => a.status === 'running').length} agents running
+          {agentRows.filter(a => a.status === 'running').length} agents running
         </span>
         {claudeBinary && (
           <>
-            <span className="text-xs font-mono text-muted">·</span>
-            <span className="text-xs font-mono text-muted truncate max-w-48">{claudeBinary}</span>
+            <span className="text-xs text-muted">·</span>
+            <span className="text-xs font-mono text-muted truncate max-w-xs">{claudeBinary}</span>
           </>
         )}
       </div>
