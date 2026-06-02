@@ -6,8 +6,13 @@ import { useLibraryStore } from '@/store/libraryStore'
 import { useAgentStore } from '@/store/agentStore'
 import { cn } from '@/lib/utils'
 import { Plus, RefreshCw, Cpu, Terminal } from 'lucide-react'
+import type { Project } from '@/store/projectStore'
 
-export function Hub() {
+interface HubProps {
+  onOpenProject: (project: Project) => void
+}
+
+export function Hub({ onOpenProject }: HubProps) {
   const { projects, load: loadProjects, create, remove } = useProjectStore()
   const { claudeBinary, load: loadLibrary, rescan } = useLibraryStore()
   const { statuses } = useAgentStore()
@@ -128,7 +133,7 @@ export function Hub() {
                   key={p.id}
                   project={p}
                   agentCount={getAgentCount(p.id)}
-                  onOpen={() => alert(`Open project: ${p.name}\n(Project windows in Phase 6)`)}
+                  onOpen={() => onOpenProject(p)}
                   onDelete={() => {
                     if (confirm(`Delete "${p.name}"?`)) remove(p.id)
                   }}
