@@ -42,6 +42,7 @@ pub struct SkillItem {
 #[derive(Debug, Default)]
 pub struct AppState {
     pub projects: RwLock<Vec<Project>>,
+    #[allow(dead_code)]
     pub agents: RwLock<HashMap<String, AgentState>>,
     pub library: RwLock<Vec<SkillItem>>,
     pub claude_binary: RwLock<Option<String>>,

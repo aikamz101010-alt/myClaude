@@ -12,7 +12,6 @@ use commands::{
 };
 use process::ProcessManager;
 use state::AppState;
-use std::sync::Arc;
 
 fn main() {
     let app_state = AppState::new();

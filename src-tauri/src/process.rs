@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
 pub struct ManagedProcess {
+    #[allow(dead_code)]
     pub project_id: String,
     pub child: Child,
 }
