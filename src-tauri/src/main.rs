@@ -8,7 +8,7 @@ mod state;
 
 use commands::{
     agent::{chat_message, send_to_agent, spawn_agent, stop_agent},
-    library::{get_claude_binary, get_library, rescan_library},
+    library::{get_auth_status, get_claude_binary, get_library, rescan_library, set_api_key},
     project::{create_project, delete_project, get_projects, read_contract, touch_project, write_contract},
     terminal::{is_pty_running, resize_pty, start_pty, stop_pty, write_pty},
 };
@@ -17,45 +17,90 @@ use pty_manager::PtyManager;
 use state::AppState;
 use std::collections::HashMap;
 
-/// Source the user's shell profile to capture env vars like ANTHROPIC_API_KEY.
-/// Needed when app is launched from Finder/Spotlight (no shell environment).
+/// Capture env vars needed by Claude CLI.
+/// Strategy (in order):
+/// 1. Current process env (works when launched from terminal)
+/// 2. Try bash -l then zsh -l (covers most shell setups)
+/// 3. Parse profile files directly (fallback for ANTHROPIC_API_KEY)
 fn capture_shell_env() -> HashMap<String, String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    let output = std::process::Command::new(&shell)
-        .args(["-l", "-c", "env"])
-        .output();
+    let mut env: HashMap<String, String> = HashMap::new();
 
-    match output {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter_map(|line| {
-                    let mut parts = line.splitn(2, '=');
-                    let key = parts.next()?.to_string();
-                    let val = parts.next()?.to_string();
-                    if key.starts_with("ANTHROPIC")
-                        || key.starts_with("CLAUDE")
-                        || key == "PATH"
-                        || key == "HOME"
-                        || key == "USER"
-                        || key == "TERM"
-                        || key == "NVM_DIR"
-                        || key == "NVM_BIN"
-                        || key == "NODE_PATH"
-                        || key == "LANG"
-                        || key == "LC_ALL"
-                    {
-                        Some((key, val))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
+    // Step 1: Current process env — fastest, works when launched from terminal
+    for (k, v) in std::env::vars() {
+        if is_relevant_key(&k) {
+            env.insert(k, v);
         }
-        _ => std::env::vars()
-            .filter(|(k, _)| k.starts_with("ANTHROPIC") || k.starts_with("CLAUDE") || k == "PATH" || k == "HOME")
-            .collect(),
     }
+
+    // Step 2: Source login shells to pick up profile vars
+    for shell in &["/bin/bash", "/bin/zsh"] {
+        if let Ok(o) = std::process::Command::new(shell)
+            .args(["-l", "-c", "env"])
+            .output()
+        {
+            if o.status.success() {
+                for line in String::from_utf8_lossy(&o.stdout).lines() {
+                    let mut parts = line.splitn(2, '=');
+                    if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
+                        if is_relevant_key(k) {
+                            env.entry(k.to_string()).or_insert_with(|| v.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 3: Parse profile files directly for export KEY="VALUE" lines
+    // Covers cases where shell sourcing fails (permission, nvm init errors, etc.)
+    if let Some(home) = dirs::home_dir() {
+        let profiles = [
+            ".bash_profile", ".bashrc", ".zshrc", ".zprofile",
+            ".profile", ".bash_login",
+        ];
+        for profile in &profiles {
+            let path = home.join(profile);
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    // Match: export KEY=VALUE or export KEY="VALUE"
+                    if let Some(rest) = trimmed.strip_prefix("export ") {
+                        let rest = rest.trim();
+                        let mut parts = rest.splitn(2, '=');
+                        if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
+                            let k = k.trim().to_string();
+                            let v = v.trim().trim_matches('"').trim_matches('\'').to_string();
+                            if is_relevant_key(&k) && !v.is_empty() {
+                                // Profile file wins for ANTHROPIC keys (most explicit)
+                                if k.starts_with("ANTHROPIC") {
+                                    env.insert(k, v);
+                                } else {
+                                    env.entry(k).or_insert(v);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    env
+}
+
+fn is_relevant_key(k: &str) -> bool {
+    k.starts_with("ANTHROPIC")
+        || k.starts_with("CLAUDE")
+        || k == "PATH"
+        || k == "HOME"
+        || k == "USER"
+        || k == "SHELL"
+        || k == "TERM"
+        || k == "LANG"
+        || k == "LC_ALL"
+        || k == "NVM_DIR"
+        || k == "NVM_BIN"
+        || k == "NODE_PATH"
 }
 
 fn main() {
@@ -104,6 +149,8 @@ fn main() {
             get_library,
             rescan_library,
             get_claude_binary,
+            get_auth_status,
+            set_api_key,
             // Chat (claude --print)
             chat_message,
             // Persistent agent session

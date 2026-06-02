@@ -14,6 +14,7 @@ export interface SkillItem {
 interface LibraryStore {
   items: SkillItem[]
   claudeBinary: string | null
+  authStatus: string
   load: () => Promise<void>
   rescan: () => Promise<void>
 }
@@ -21,12 +22,14 @@ interface LibraryStore {
 export const useLibraryStore = create<LibraryStore>((set) => ({
   items: [],
   claudeBinary: null,
+  authStatus: '',
   load: async () => {
-    const [items, claudeBinary] = await Promise.all([
+    const [items, claudeBinary, authStatus] = await Promise.all([
       invoke<SkillItem[]>('get_library'),
       invoke<string | null>('get_claude_binary'),
+      invoke<string>('get_auth_status'),
     ])
-    set({ items, claudeBinary })
+    set({ items, claudeBinary, authStatus })
   },
   rescan: async () => {
     const items = await invoke<SkillItem[]>('rescan_library')

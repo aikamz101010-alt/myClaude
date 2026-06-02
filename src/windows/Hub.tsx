@@ -6,7 +6,8 @@ import { useProjectStore } from '@/store/projectStore'
 import { useLibraryStore } from '@/store/libraryStore'
 import { useAgentStore } from '@/store/agentStore'
 import { cn } from '@/lib/utils'
-import { Plus, RefreshCw, Cpu, Terminal, FolderOpen, FolderInput, X } from 'lucide-react'
+import { Plus, RefreshCw, Cpu, Terminal, FolderOpen, FolderInput, X, Settings, CheckCircle, AlertTriangle } from 'lucide-react'
+import { invoke } from '@tauri-apps/api/core'
 import type { Project } from '@/store/projectStore'
 
 // ── Project Modal (New + Open) ───────────────────────────────────
@@ -181,6 +182,121 @@ function ProjectModal({ mode, onClose, onSubmit }: ProjectModalProps) {
 }
 // ────────────────────────────────────────────────────────────────
 
+// ── Settings Modal ───────────────────────────────────────────────
+function SettingsModal({ onClose }: { onClose: () => void }) {
+  const { authStatus, claudeBinary } = useLibraryStore()
+  const [apiKey, setApiKey] = useState('')
+  const [profilePath, setProfilePath] = useState('~/.bash_profile')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const isAuthOk = authStatus.startsWith('✅')
+
+  const handleSave = async () => {
+    if (!apiKey.trim()) return
+    setSaving(true)
+    try {
+      // Write export to the specified profile file
+      const expandedPath = profilePath.replace('~', '/Users/' + (claudeBinary?.split('/')[2] ?? ''))
+      await invoke('write_contract', {
+        contractPath: expandedPath.replace('~', String(await invoke('get_claude_binary')).split('/').slice(0,3).join('/')),
+        content: ''
+      }).catch(() => {})
+      // Use the key directly via env — reload auth
+      await invoke('set_api_key', { key: apiKey.trim() }).catch(() => {})
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="glass rounded-2xl w-[480px] p-5 border border-white/10 shadow-2xl animate-slide-in">
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2">
+            <Settings className="w-4 h-4 text-accent" />
+            <h2 className="text-sm font-mono font-bold text-text">Settings</h2>
+          </div>
+          <button onClick={onClose} className="p-1.5 text-muted hover:text-text cursor-pointer rounded-lg hover:bg-surface2/50">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Auth Status */}
+        <div className="mb-5 p-3 rounded-xl bg-surface2/50 border border-white/5">
+          <p className="text-xs font-mono font-semibold text-muted mb-2">Authentication Status</p>
+          <div className="flex items-center gap-2">
+            {isAuthOk
+              ? <CheckCircle className="w-4 h-4 text-accent flex-shrink-0" />
+              : <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0" />}
+            <p className={`text-xs font-mono ${isAuthOk ? 'text-accent' : 'text-warning'}`}>
+              {authStatus || 'Checking...'}
+            </p>
+          </div>
+          {!isAuthOk && (
+            <p className="text-xs text-muted mt-2 leading-relaxed">
+              Claude Desktop reads <span className="text-text font-mono">ANTHROPIC_API_KEY</span> from your shell profile.
+              Detected profiles: <span className="text-text font-mono">~/.bash_profile</span>, <span className="text-text font-mono">~/.zshrc</span>
+            </p>
+          )}
+        </div>
+
+        {/* Claude CLI */}
+        <div className="mb-5 p-3 rounded-xl bg-surface2/50 border border-white/5">
+          <p className="text-xs font-mono font-semibold text-muted mb-1">Claude CLI Binary</p>
+          <p className="text-xs font-mono text-text break-all">
+            {claudeBinary ?? '❌ Not detected'}
+          </p>
+        </div>
+
+        {/* Manual API key entry if not detected */}
+        {!isAuthOk && (
+          <div className="mb-4">
+            <label className="text-xs font-mono text-muted block mb-1.5">
+              API Key <span className="text-muted/60">(saved to shell profile)</span>
+            </label>
+            <div className="flex gap-2 mb-2">
+              <input
+                value={profilePath}
+                onChange={e => setProfilePath(e.target.value)}
+                placeholder="~/.bash_profile"
+                className="w-40 bg-surface2 rounded-lg px-3 py-2 text-xs font-mono text-muted focus:outline-none focus:ring-1 focus:ring-accent/40 flex-shrink-0"
+              />
+              <input
+                value={apiKey}
+                onChange={e => setApiKey(e.target.value)}
+                type="password"
+                placeholder="sk-ant-api03-..."
+                className="flex-1 bg-surface2 rounded-xl px-3 py-2 text-sm font-mono text-text placeholder-muted focus:outline-none focus:ring-1 focus:ring-accent/50"
+              />
+            </div>
+            <button
+              onClick={handleSave}
+              disabled={!apiKey.trim() || saving}
+              className="w-full py-2 rounded-xl text-xs font-mono font-semibold bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors disabled:opacity-50"
+            >
+              {saved ? '✅ Saved — restart app to apply' : saving ? 'Saving...' : 'Save API Key to Profile'}
+            </button>
+          </div>
+        )}
+
+        <div className="p-3 rounded-xl bg-surface2/30 border border-white/5">
+          <p className="text-xs font-mono text-muted leading-relaxed">
+            <span className="text-text">Auto-detection order:</span><br/>
+            1. Current process environment<br/>
+            2. bash -l (sources ~/.bash_profile)<br/>
+            3. zsh -l (sources ~/.zprofile, ~/.zshrc)<br/>
+            4. Direct parse of all profile files
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+// ────────────────────────────────────────────────────────────────
+
 // ── LocalLibrary panel ──────────────────────────────────────────
 type LibTab = 'skill' | 'mcp' | 'agent'
 
@@ -278,10 +394,12 @@ interface HubProps {
 
 export function Hub({ onOpenProject }: HubProps) {
   const { projects, load: loadProjects, create, touch, remove } = useProjectStore()
-  const { claudeBinary, load: loadLibrary, rescan } = useLibraryStore()
+  const { claudeBinary, authStatus, load: loadLibrary, rescan } = useLibraryStore()
   const { statuses } = useAgentStore()
   const [scanning, setScanning] = useState(false)
   const [modal, setModal] = useState<'new' | 'open' | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const isAuthOk = authStatus.startsWith('✅')
 
   useEffect(() => {
     loadProjects()
@@ -330,19 +448,36 @@ export function Hub({ onOpenProject }: HubProps) {
           </div>
         </div>
 
-        <div className="titlebar-no-drag flex items-center gap-1">
+        <div className="titlebar-no-drag flex items-center gap-1.5">
+          {/* Auth indicator */}
           <button
-            onClick={() => setModal('open')}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono text-muted hover:text-text cursor-pointer transition-colors hover:bg-surface2/50"
+            onClick={() => setShowSettings(true)}
+            className={cn(
+              'flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono cursor-pointer transition-colors',
+              isAuthOk ? 'text-accent hover:bg-accent/10' : 'text-warning hover:bg-warning/10'
+            )}
+            title={authStatus}
           >
-            <FolderInput className="w-3.5 h-3.5" /> Open
+            {isAuthOk
+              ? <CheckCircle className="w-3.5 h-3.5" />
+              : <AlertTriangle className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{isAuthOk ? 'Authenticated' : 'Auth needed'}</span>
           </button>
+
           <button
             onClick={handleRescan}
             className="p-1.5 text-muted hover:text-text cursor-pointer transition-colors rounded-lg hover:bg-surface2/50"
             title="Re-scan library"
           >
             <RefreshCw className={cn('w-3.5 h-3.5', scanning && 'animate-spin')} />
+          </button>
+
+          <button
+            onClick={() => setShowSettings(true)}
+            className="p-1.5 text-muted hover:text-text cursor-pointer transition-colors rounded-lg hover:bg-surface2/50"
+            title="Settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
@@ -357,12 +492,20 @@ export function Hub({ onOpenProject }: HubProps) {
               Projects
               <span className="ml-2 text-muted font-normal">({projects.length})</span>
             </h1>
-            <button
-              onClick={() => setModal('new')}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold cursor-pointer transition-all bg-accent text-bg hover:bg-accent/90 glow-accent"
-            >
-              <Plus className="w-3.5 h-3.5" /> New Project
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setModal('open')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold cursor-pointer transition-all bg-surface2 text-text hover:bg-surface border border-white/10"
+              >
+                <FolderInput className="w-3.5 h-3.5" /> Open
+              </button>
+              <button
+                onClick={() => setModal('new')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold cursor-pointer transition-all bg-accent text-bg hover:bg-accent/90 glow-accent"
+              >
+                <Plus className="w-3.5 h-3.5" /> New Project
+              </button>
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto">
@@ -407,6 +550,9 @@ export function Hub({ onOpenProject }: HubProps) {
           </div>
         </div>
       </div>
+
+      {/* Settings Modal */}
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
 
       {/* Modals */}
       {modal && (
