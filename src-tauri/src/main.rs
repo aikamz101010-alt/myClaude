@@ -8,7 +8,7 @@ mod state;
 
 use commands::{
     agent::{chat_message, send_to_agent, spawn_agent, stop_agent},
-    library::{get_auth_status, get_claude_binary, get_library, rescan_library, set_api_key},
+    library::{get_auth_status, get_claude_binary, get_library, launch_claude_login, rescan_library, set_api_key},
     project::{create_project, delete_project, get_projects, read_contract, touch_project, write_contract},
     terminal::{is_pty_running, resize_pty, start_pty, stop_pty, write_pty},
 };
@@ -151,6 +151,7 @@ fn main() {
             get_claude_binary,
             get_auth_status,
             set_api_key,
+            launch_claude_login,
             // Chat (claude --print)
             chat_message,
             // Persistent agent session

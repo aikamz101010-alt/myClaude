@@ -20,22 +20,34 @@ export const useAgentStore = create<AgentStore>((set) => ({
   statuses: {},
 
   chat: async (projectId, message, workingDir) => {
-    // Optimistically set running — backend will emit status events too
-    set((s) => ({ statuses: { ...s.statuses, [projectId]: 'running' } }))
+    set((s) => ({
+      statuses: { ...s.statuses, [projectId]: 'running' },
+      // Add user message to output
+      outputs: {
+        ...s.outputs,
+        [projectId]: [...(s.outputs[projectId] ?? []), `> ${message}`],
+      },
+    }))
+
     try {
-      await invoke('chat_message', { projectId, message, workingDir })
-    } catch (err) {
-      // Append error to output
+      // Returns full response text directly — no streaming events
+      const response = await invoke<string>('chat_message', { message, workingDir })
       set((s) => ({
+        statuses: { ...s.statuses, [projectId]: 'idle' },
         outputs: {
           ...s.outputs,
-          [projectId]: [...(s.outputs[projectId] ?? []), `\n[Error] ${String(err)}`],
+          [projectId]: [...(s.outputs[projectId] ?? []), response.trim()],
         },
-        statuses: { ...s.statuses, [projectId]: 'error' },
       }))
-      return
+    } catch (err) {
+      set((s) => ({
+        statuses: { ...s.statuses, [projectId]: 'error' },
+        outputs: {
+          ...s.outputs,
+          [projectId]: [...(s.outputs[projectId] ?? []), `[Error] ${String(err)}`],
+        },
+      }))
     }
-    set((s) => ({ statuses: { ...s.statuses, [projectId]: 'idle' } }))
   },
 
   spawnAgent: async (projectId, workingDir) => {

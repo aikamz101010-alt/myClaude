@@ -33,12 +33,18 @@ export function ProjectWindow({ project, onBack }: Props) {
     Record<string, Array<{ id: string; name: string; item_type: string }>>
   >({ skill: [], agent: [], mcp: [] })
   const [showAddURL, setShowAddURL] = useState(false)
-  const { spawnAgent, stopAgent, statuses, subscribeOutput } = useAgentStore()
+  const { spawnAgent, stopAgent, statuses, subscribeOutput, clearOutput } = useAgentStore()
   const status = statuses[project.id] ?? 'idle'
 
   useEffect(() => {
+    // Each project gets its own isolated session
+    clearOutput(project.id)
     const unsub = subscribeOutput(project.id)
-    return unsub
+    return () => {
+      unsub()
+      // Stop any running agent when leaving project
+      stopAgent(project.id).catch(() => {})
+    }
   }, [project.id])
 
   const handleStart = async () => {
