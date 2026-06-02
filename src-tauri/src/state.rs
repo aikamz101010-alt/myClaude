@@ -41,6 +41,8 @@ pub struct SkillItem {
     pub version: String,
     pub source_path: String,
     pub item_type: String, // "skill" | "agent" | "mcp"
+    #[serde(default)]
+    pub model: String,     // e.g. "claude-sonnet-4-6" for agents
 }
 
 #[derive(Debug, Default)]

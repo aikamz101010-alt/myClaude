@@ -244,17 +244,24 @@ function LocalLibraryPanel({ onRescan, scanning }: { onRescan: () => void; scann
           active.list.map(item => (
             <div
               key={item.id}
-              className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-surface2/60 transition-colors group"
+              className="flex items-start gap-2 px-2 py-1.5 rounded-lg hover:bg-surface2/60 transition-colors"
             >
-              <span className="text-xs flex-shrink-0">{active.icon}</span>
+              <span className="text-xs flex-shrink-0 mt-0.5">{active.icon}</span>
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-mono text-text truncate">{item.name}</p>
                 {item.description && (
                   <p className="text-xs text-muted truncate leading-tight">{item.description}</p>
                 )}
+                {/* Model badge for agents */}
+                {item.model && (
+                  <span className="inline-block mt-0.5 text-xs font-mono text-accent/70 bg-accent/10 px-1.5 py-0.5 rounded">
+                    {item.model.replace('claude-', '').replace('-latest', '')}
+                  </span>
+                )}
               </div>
-              {item.version && item.version !== 'latest' && (
-                <span className="text-xs font-mono text-muted/50 flex-shrink-0">{item.version}</span>
+              {/* Source badge */}
+              {item.version && item.version !== 'latest' && item.version !== 'plugin' && (
+                <span className="text-xs font-mono text-muted/40 flex-shrink-0">{item.version}</span>
               )}
             </div>
           ))

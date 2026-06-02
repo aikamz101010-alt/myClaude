@@ -1,17 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAgentStore } from '@/store/agentStore'
 import { cn } from '@/lib/utils'
-import { Send, Paperclip, Play, AlertCircle, X } from 'lucide-react'
+import { Send, Paperclip, Trash2, AlertCircle, X } from 'lucide-react'
 
 interface Props {
   projectId: string
-  onStartAgent?: () => void
+  workingDir: string
 }
 
-export function ChatView({ projectId, onStartAgent }: Props) {
-  const { outputs, statuses, sendMessage } = useAgentStore()
+export function ChatView({ projectId, workingDir }: Props) {
+  const { outputs, statuses, chat, clearOutput } = useAgentStore()
   const [input, setInput] = useState('')
-  const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -25,24 +24,16 @@ export function ChatView({ projectId, onStartAgent }: Props) {
   }, [lines])
 
   const handleSend = async () => {
-    if (!input.trim() || sending) return
-
-    if (!isRunning) {
-      setError('Agent is not running. Click Start first.')
-      return
-    }
-
+    if (!input.trim() || isRunning) return
     setError('')
-    setSending(true)
+    const msg = input.trim()
+    setInput('')
     try {
-      await sendMessage(projectId, input.trim())
-      setInput('')
-      textareaRef.current?.focus()
+      await chat(projectId, msg, workingDir)
     } catch (err) {
-      setError(`Failed to send: ${String(err)}`)
-    } finally {
-      setSending(false)
+      setError(String(err))
     }
+    textareaRef.current?.focus()
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -54,50 +45,64 @@ export function ChatView({ projectId, onStartAgent }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Messages area */}
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <div className={cn('w-2 h-2 rounded-full', {
+            'bg-accent animate-pulse': isRunning,
+            'bg-muted': status === 'idle',
+            'bg-error': status === 'error',
+          })} />
+          <span className="text-xs font-mono text-muted">
+            {isRunning ? 'Claude thinking...' : status === 'error' ? 'Error' : 'Ready'}
+          </span>
+        </div>
+        <button
+          onClick={() => clearOutput(projectId)}
+          className="flex items-center gap-1 text-xs font-mono text-muted hover:text-text cursor-pointer transition-colors"
+          title="Clear chat"
+        >
+          <Trash2 className="w-3 h-3" /> Clear
+        </button>
+      </div>
+
+      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {lines.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
-            {!isRunning ? (
-              <>
-                <div className="w-12 h-12 rounded-xl bg-surface2 flex items-center justify-center border border-white/5">
-                  <Play className="w-5 h-5 text-muted" />
-                </div>
-                <div>
-                  <p className="text-sm text-text font-mono font-semibold mb-1">Agent not started</p>
-                  <p className="text-xs text-muted font-mono">Click <span className="text-accent">Start</span> in the toolbar to launch Claude CLI</p>
-                </div>
-                {onStartAgent && (
-                  <button
-                    onClick={onStartAgent}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-accent text-bg text-sm font-mono font-semibold cursor-pointer hover:bg-accent/90 transition-colors glow-accent"
-                  >
-                    <Play className="w-4 h-4" /> Start Agent
-                  </button>
-                )}
-              </>
-            ) : (
-              <>
-                <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center border border-accent/20">
-                  <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-                </div>
-                <p className="text-sm text-muted font-mono">Agent running — send a message below</p>
-              </>
-            )}
+          <div className="flex flex-col items-center justify-center h-full gap-3">
+            <div className="w-12 h-12 rounded-xl bg-surface2 flex items-center justify-center border border-white/5">
+              <Send className="w-5 h-5 text-muted" />
+            </div>
+            <p className="text-sm text-muted font-mono text-center">
+              Type a message and press Enter to chat with Claude
+            </p>
           </div>
         ) : (
           <div className="glass rounded-xl p-4 animate-fade-in">
-            <pre className="text-xs font-mono text-text whitespace-pre-wrap leading-relaxed">
+            <pre className="text-sm font-mono text-text whitespace-pre-wrap leading-relaxed">
               {lines.join('\n')}
             </pre>
           </div>
         )}
+
+        {/* Thinking indicator */}
+        {isRunning && (
+          <div className="flex items-center gap-2 px-4 py-2 animate-fade-in">
+            <div className="flex gap-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '0ms' }} />
+              <div className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '150ms' }} />
+              <div className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+            <span className="text-xs text-muted font-mono">Claude is thinking...</span>
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </div>
 
-      {/* Error banner */}
+      {/* Error */}
       {error && (
-        <div className="mx-3 mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-error/10 border border-error/20 animate-fade-in">
+        <div className="mx-3 mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-error/10 border border-error/20">
           <AlertCircle className="w-4 h-4 text-error flex-shrink-0" />
           <p className="text-xs font-mono text-error flex-1">{error}</p>
           <button onClick={() => setError('')} className="text-error/60 hover:text-error cursor-pointer">
@@ -106,20 +111,8 @@ export function ChatView({ projectId, onStartAgent }: Props) {
         </div>
       )}
 
-      {/* Input area */}
+      {/* Input */}
       <div className="p-3 border-t border-white/5 flex-shrink-0">
-        {/* Status indicator */}
-        <div className="flex items-center gap-1.5 mb-2 px-1">
-          <div className={cn('w-1.5 h-1.5 rounded-full', {
-            'bg-accent animate-pulse': isRunning,
-            'bg-muted': status === 'idle',
-            'bg-error': status === 'error',
-          })} />
-          <span className="text-xs font-mono text-muted">
-            {isRunning ? 'Agent running' : status === 'error' ? 'Agent error' : 'Agent stopped'}
-          </span>
-        </div>
-
         <div className="flex items-end gap-2">
           <button className="p-2 text-muted hover:text-text cursor-pointer transition-colors flex-shrink-0">
             <Paperclip className="w-4 h-4" />
@@ -129,36 +122,33 @@ export function ChatView({ projectId, onStartAgent }: Props) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={!isRunning}
-            placeholder={isRunning ? 'Message Claude... (Enter to send)' : 'Start agent to send messages'}
+            disabled={isRunning}
+            placeholder={isRunning ? 'Claude is thinking...' : 'Message Claude... (Enter to send)'}
             rows={2}
             className={cn(
               'flex-1 bg-surface2 rounded-xl px-3 py-2',
               'text-sm font-mono text-text placeholder-muted',
               'resize-none focus:outline-none focus:ring-1 focus:ring-accent/40',
               'transition-all duration-150',
-              !isRunning && 'opacity-50 cursor-not-allowed',
+              isRunning && 'opacity-60 cursor-not-allowed',
             )}
           />
           <button
             onClick={handleSend}
-            disabled={!input.trim() || sending || !isRunning}
+            disabled={!input.trim() || isRunning}
             className={cn(
               'p-2.5 rounded-xl transition-all duration-200 flex-shrink-0',
-              input.trim() && !sending && isRunning
+              input.trim() && !isRunning
                 ? 'bg-accent text-bg hover:bg-accent/90 glow-accent cursor-pointer'
                 : 'bg-surface2 text-muted cursor-not-allowed',
             )}
           >
-            {sending
+            {isRunning
               ? <div className="w-4 h-4 border-2 border-muted border-t-transparent rounded-full animate-spin" />
-              : <Send className="w-4 h-4" />
-            }
+              : <Send className="w-4 h-4" />}
           </button>
         </div>
-        <p className="text-xs text-muted/60 font-mono mt-1.5 px-1">
-          Enter to send · Shift+Enter for new line
-        </p>
+        <p className="text-xs text-muted/60 font-mono mt-1.5 px-1">Enter to send · Shift+Enter new line</p>
       </div>
     </div>
   )

@@ -8,6 +8,7 @@ export interface SkillItem {
   version: string
   source_path: string
   item_type: string // 'skill' | 'agent' | 'mcp'
+  model: string     // e.g. 'claude-sonnet-4-6' for agents
 }
 
 interface LibraryStore {

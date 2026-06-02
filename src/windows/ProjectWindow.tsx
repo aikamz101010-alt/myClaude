@@ -158,7 +158,7 @@ export function ProjectWindow({ project, onBack }: Props) {
             {tab === 'chat' && (
               isTerminalMode
                 ? <TerminalView projectId={project.id} />
-                : <ChatView projectId={project.id} onStartAgent={status !== 'running' ? handleStart : undefined} />
+                : <ChatView projectId={project.id} workingDir={project.path} />
             )}
             {tab === 'terminal' && <TerminalView projectId={project.id} />}
             {tab === 'contract' && (

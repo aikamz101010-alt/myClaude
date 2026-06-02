@@ -6,7 +6,7 @@ mod scanner;
 mod state;
 
 use commands::{
-    agent::{send_to_agent, spawn_agent, stop_agent},
+    agent::{chat_message, send_to_agent, spawn_agent, stop_agent},
     library::{get_claude_binary, get_library, rescan_library},
     project::{create_project, delete_project, get_projects, read_contract, touch_project, write_contract},
 };
@@ -51,6 +51,7 @@ fn main() {
             get_library,
             rescan_library,
             get_claude_binary,
+            chat_message,
             spawn_agent,
             send_to_agent,
             stop_agent,

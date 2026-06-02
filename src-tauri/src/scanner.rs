@@ -46,23 +46,21 @@ pub async fn scan_library(state: Arc<AppState>) {
     let mut seen_names: HashSet<String> = HashSet::new();
 
     if let Some(home) = home_dir() {
-        // 1. ~/.claude/skills/  — direct skills directory
-        let direct_skills = home.join(".claude/skills");
-        scan_skills_dir(&direct_skills, &mut items, &mut seen_names, "personal");
+        let claude_dir = home.join(".claude");
 
-        // 2. ~/.claude/plugins/cache/  — packages (recurse up to 5 levels deep)
-        let plugins_cache = home.join(".claude/plugins/cache");
-        scan_plugins_recursive(&plugins_cache, &mut items, &mut seen_names, 0);
+        // 1. ~/.claude/skills/  — direct personal skills
+        scan_skills_dir(&claude_dir.join("skills"), &mut items, &mut seen_names, "personal");
 
-        // 3. MCP servers — check both settings.json AND settings.local.json
-        for settings_file in &["settings.json", "settings.local.json"] {
-            let path = home.join(".claude").join(settings_file);
-            scan_mcp_plugins(&path, &mut items, &mut seen_names);
+        // 2. ~/.claude/plugins/cache/  — installed plugin packages (recursive)
+        scan_plugins_recursive(&claude_dir.join("plugins/cache"), &mut items, &mut seen_names, 0);
+
+        // 3. MCP servers — both settings files
+        for f in &["settings.json", "settings.local.json"] {
+            scan_mcp_plugins(&claude_dir.join(f), &mut items, &mut seen_names);
         }
 
-        // 4. Agents from CLAUDE.md
-        let claude_md = home.join(".claude/CLAUDE.md");
-        scan_agents_from_md(&claude_md, &mut items);
+        // 4. ~/.claude/agents/  — each .md file is an agent definition
+        scan_agents_dir(&claude_dir.join("agents"), &mut items);
     }
 
     *state.library.write() = items;
@@ -76,13 +74,17 @@ fn scan_skills_dir(
     source_label: &str,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
+    let mut entries_vec: Vec<_> = entries.flatten().collect();
+    entries_vec.sort_by_key(|e| e.file_name());
+
+    for entry in entries_vec {
         let path = entry.path();
         if !path.is_dir() { continue; }
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') { continue; }
+        // Skip hidden dirs and backup dirs
+        if name.starts_with('.') || name.ends_with(".bak") || name.ends_with("-bak") { continue; }
 
-        // Deduplicate by name
+        // Deduplicate by name — first-seen wins (personal skills take priority)
         if seen.contains(&name) { continue; }
         seen.insert(name.clone());
 
@@ -94,6 +96,7 @@ fn scan_skills_dir(
             version: source_label.to_string(),
             source_path: path.to_string_lossy().into(),
             item_type: "skill".into(),
+            model: String::new(),
         });
     }
 }
@@ -169,9 +172,81 @@ fn scan_mcp_plugins(
                 version: String::new(),
                 source_path: settings_path.to_string_lossy().into(),
                 item_type: "mcp".into(),
+                model: String::new(),
             });
         }
     }
+}
+
+/// Scan ~/.claude/agents/ — each .md file is an agent definition
+fn scan_agents_dir(dir: &PathBuf, items: &mut Vec<SkillItem>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut files: Vec<_> = entries.flatten().collect();
+    files.sort_by_key(|e| e.file_name());
+
+    for entry in files {
+        let path = entry.path();
+        if path.extension().map_or(true, |e| e != "md") { continue; }
+
+        let raw_name = path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if raw_name.is_empty() { continue; }
+
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+
+        // Parse YAML-like frontmatter for description and model
+        let (description, model) = parse_agent_frontmatter(&content);
+
+        items.push(SkillItem {
+            id: Uuid::new_v4().to_string(),
+            name: raw_name,
+            description,
+            version: String::new(),
+            source_path: path.to_string_lossy().into(),
+            item_type: "agent".into(),
+            model,
+        });
+    }
+}
+
+/// Parse agent .md frontmatter for `description:` and `model:` fields.
+fn parse_agent_frontmatter(content: &str) -> (String, String) {
+    let mut description = String::new();
+    let mut model = String::new();
+    let mut in_frontmatter = false;
+    let mut found_start = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            if !found_start { found_start = true; in_frontmatter = true; continue; }
+            else { break; } // end of frontmatter
+        }
+        if in_frontmatter {
+            if let Some(val) = trimmed.strip_prefix("description:") {
+                description = val.trim().trim_matches('"').to_string();
+            } else if let Some(val) = trimmed.strip_prefix("model:") {
+                model = val.trim().trim_matches('"').to_string();
+            }
+        }
+    }
+
+    // Fallback description: first non-empty non-heading line after frontmatter
+    if description.is_empty() {
+        let mut past_front = !found_start;
+        for line in content.lines() {
+            if line.trim() == "---" { past_front = !past_front; continue; }
+            if !past_front { continue; }
+            let t = line.trim();
+            if !t.is_empty() && !t.starts_with('#') && !t.starts_with('-') {
+                description = t.chars().take(90).collect();
+                break;
+            }
+        }
+    }
+
+    (description, model)
 }
 
 fn scan_agents_from_md(claude_md: &PathBuf, items: &mut Vec<SkillItem>) {
@@ -199,6 +274,7 @@ fn scan_agents_from_md(claude_md: &PathBuf, items: &mut Vec<SkillItem>) {
                     version: String::new(),
                     source_path: claude_md.to_string_lossy().into(),
                     item_type: "agent".into(),
+                    model: String::new(),
                 });
             }
         } else if in_agents_section && trimmed.starts_with("- ") && trimmed.ends_with(':') {
@@ -211,6 +287,7 @@ fn scan_agents_from_md(claude_md: &PathBuf, items: &mut Vec<SkillItem>) {
                     version: String::new(),
                     source_path: claude_md.to_string_lossy().into(),
                     item_type: "agent".into(),
+                    model: String::new(),
                 });
             }
         }
