@@ -6,12 +6,12 @@ import { Volume2, VolumeX, Loader2, Bot, Settings, X } from 'lucide-react'
 import { useSessionStore, type Message } from '@/store/sessionStore'
 import { useAvatarStore } from '@/store/avatarStore'
 import { lipSync } from '@/lib/lipsync'
-import { enqueueSpeech, resetNarration, markNarrated, stopSpeaking, sanitizeForSpeech } from '@/lib/speak'
+import { enqueueSpeech, resetNarration, markNarrated, stopSpeaking, sanitizeForSpeech, speak } from '@/lib/speak'
 import { cn } from '@/lib/utils'
 import { ChatInput, type AttachedFile } from './ChatInput'
 import { AvatarVoiceSettings } from '@/components/settings/AvatarVoiceSettings'
 import { STANDBY_POSES, nextStandbyPose, SPEAK_GESTURES, nextSpeakGesture, type StandbyPose } from '@/lib/standbyPoses'
-import { runDirector, type Emotion } from '@/lib/liveAssistant'
+import { runDirector, commandAvatar, type Emotion } from '@/lib/liveAssistant'
 
 // A live-assistant performance cue applied for a short window.
 interface ActiveCue { emotion: Emotion; gesture: string; until: number }
@@ -596,6 +596,7 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
   const side = useAvatarStore(s => s.subtitleSide)
   const showLog = useAvatarStore(s => s.showLog)
   const interactive = useAvatarStore(s => s.interactive)
+  const liveAssistant = useAvatarStore(s => s.liveAssistant)
   const [status, setStatus] = useState<Status>('loading')
   const [showSettings, setShowSettings] = useState(false)
 
@@ -631,9 +632,26 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
 
   const handleSend = (text: string, files: AttachedFile[]) => {
     if (!chatId) return
-    setPending(true)   // react instantly: think now, answer when Claude responds
     const fileRefs = files.map(f => `@${f.path}`).join(' ')
     const full = fileRefs ? `${fileRefs}\n${text}` : text
+    const trimmed = text.trim()
+
+    // Live Assistant ON → the avatar decides: perform it herself (gesture +
+    // spoken reply), or forward coding/work requests to the main Claude Code agent.
+    if (liveAssistant && trimmed && files.length === 0) {
+      void commandAvatar(trimmed, chat?.workingDir || '.').then(cmd => {
+        if (cmd.action === 'perform') {
+          cueRef.current = { emotion: cmd.emotion ?? 'happy', gesture: cmd.gesture ?? 'none', until: Date.now() + 9000 }
+          if (cmd.say) void speak(cmd.say)
+        } else {
+          setPending(true)
+          sendMessageStream(chatId, full)
+        }
+      })
+      return
+    }
+
+    setPending(true)   // react instantly: think now, answer when Claude responds
     sendMessageStream(chatId, full)
   }
 

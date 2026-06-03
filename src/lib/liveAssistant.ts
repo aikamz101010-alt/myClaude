@@ -105,6 +105,76 @@ export async function runDirector(reply: string, workingDir: string): Promise<Pe
   return parseCue(acc)
 }
 
+export interface AvatarCommand {
+  action: 'perform' | 'forward'
+  emotion?: Emotion
+  gesture?: string
+  say?: string
+}
+
+/** Interactive command for the avatar. The live-assistant (separate session)
+ * decides whether the user is talking TO the avatar (perform a gesture / chat)
+ * or asking for coding work meant for the main Claude Code agent (forward). */
+export async function commandAvatar(userText: string, workingDir: string): Promise<AvatarCommand> {
+  const { assistantName, persona, liveModel } = useAvatarStore.getState()
+  const name = assistantName || 'the assistant'
+  const prompt = [
+    `You are ${name}, a friendly 3D virtual-assistant avatar.`,
+    persona ? `Persona: ${persona}` : '',
+    `The user said: "${userText}"`,
+    `Decide who this is for:`,
+    `- If it is addressed to YOU (the avatar) — to perform/express something (dance, wave, spin, look happy, greet) or to chat with you — reply:`,
+    `  {"action":"perform","emotion":"<emotion>","gesture":"<gesture>","say":"<short spoken reply in the user's language, max 160 chars>"}`,
+    `- If it is a software / coding / file / terminal task meant for the main Claude Code assistant, reply:`,
+    `  {"action":"forward"}`,
+    `Allowed emotions: ${EMOTIONS.join(', ')}.`,
+    `Allowed gestures: ${gestureNames().join(', ')}, none.`,
+    `Output ONLY compact JSON on one line. Never use tools.`,
+  ].filter(Boolean).join('\n')
+
+  const id = ++seq
+  const channel = `__director__-${id}`
+  let acc = ''
+  let resolveDone!: () => void
+  const done = new Promise<void>(r => { resolveDone = r })
+  const unlisten = await listen<{ kind: string; text?: string | null; request_id?: string | null }>(
+    `chat:event:${channel}`,
+    ev => {
+      const e = ev.payload
+      if (e.kind === 'text' && e.text) acc += e.text
+      else if (e.kind === 'permission_request' && e.request_id) {
+        invoke('respond_permission', { chatId: channel, requestId: e.request_id, allow: false, message: 'no tools' }).catch(() => {})
+      } else if (e.kind === 'done' || e.kind === 'error') resolveDone()
+    },
+  )
+  try {
+    await invoke('send_chat_stream', {
+      projectId: channel, message: prompt, workingDir,
+      sessionId: null, model: LIVE_MODEL_ID[liveModel], permissionMode: 'default',
+    })
+    await done
+  } catch {
+    return { action: 'forward' } // on failure, let the main agent handle it
+  } finally {
+    unlisten()
+  }
+
+  const m = acc.match(/\{[\s\S]*?\}/)
+  if (!m) return { action: 'forward' }
+  try {
+    const o = JSON.parse(m[0]) as { action?: string; emotion?: string; gesture?: string; say?: string }
+    if (o.action === 'perform') {
+      return {
+        action: 'perform',
+        emotion: (EMOTIONS as readonly string[]).includes(o.emotion ?? '') ? (o.emotion as Emotion) : 'happy',
+        gesture: typeof o.gesture === 'string' ? o.gesture : 'none',
+        say: typeof o.say === 'string' ? o.say : '',
+      }
+    }
+  } catch { /* fall through */ }
+  return { action: 'forward' }
+}
+
 /** Write/refresh the live-virtual-assistant agent file from the persona, to the
  * global `~/.claude/agents/` folder (shared across all projects). The directory
  * is ensured first by calling `create_agent` (which runs create_dir_all before

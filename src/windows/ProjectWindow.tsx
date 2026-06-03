@@ -7,14 +7,13 @@ import { ContractEditor, type ContractEditorHandle } from '@/components/project/
 import { ContractPanel } from '@/components/project/ContractPanel'
 import { LibraryPanel } from '@/components/library/LibraryPanel'
 import { AddFromURL } from '@/components/library/AddFromURL'
-import { Avatar3DView } from '@/components/project/Avatar3DView'
 import { CharacterView } from '@/components/project/CharacterView'
 import { useSessionStore } from '@/store/sessionStore'
 import { useLibraryStore } from '@/store/libraryStore'
 import { useAvatarStore } from '@/store/avatarStore'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
 import { cn } from '@/lib/utils'
-import { MessageSquare, Terminal, FileText, ArrowLeft, Circle, Plus, X, Folder, Bot, PersonStanding } from 'lucide-react'
+import { MessageSquare, Terminal, FileText, ArrowLeft, Circle, Plus, X, Folder, PersonStanding } from 'lucide-react'
 import type { Project } from '@/store/projectStore'
 import type { SkillItem } from '@/store/libraryStore'
 
@@ -52,8 +51,6 @@ export function ProjectWindow({ project, onBack }: Props) {
 
   const { ptyStatus, chatsByProject, chats, createChat, closeChat, sendMessageStream } = useSessionStore()
   const { items } = useLibraryStore()
-  const avatarEnabled = useAvatarStore(s => s.enabled)
-  const toggleAvatar = useAvatarStore(s => s.toggleEnabled)
   const assistantName = useAvatarStore(s => s.assistantName)
   const ptyRunning = ptyStatus[project.id] === 'running'
 
@@ -154,12 +151,6 @@ export function ProjectWindow({ project, onBack }: Props) {
               ))}
             </div>
             <div className="w-px h-4 bg-white/10" />
-            <button onClick={toggleAvatar}
-              title={avatarEnabled ? 'Hide talking avatar' : 'Show talking avatar'}
-              className={cn('p-1 rounded-lg cursor-pointer transition-colors',
-                avatarEnabled ? 'text-accent' : 'text-muted hover:text-text')}>
-              <Bot className="w-3.5 h-3.5" />
-            </button>
             <ThemeToggle />
           </div>
         </div>
@@ -243,11 +234,6 @@ export function ProjectWindow({ project, onBack }: Props) {
                 </div>
                 {/* File editor (when a file tab is active) */}
                 {activeFile && <FileEditor key={activeFile} path={activeFile} />}
-
-                {/* Talking VRM avatar — floats over the chat, narrates replies */}
-                {tab === 'chat' && avatarEnabled && !activeFile && (
-                  <Avatar3DView chatId={activeChatId} onClose={() => toggleAvatar()} />
-                )}
               </div>
             </div>
 
