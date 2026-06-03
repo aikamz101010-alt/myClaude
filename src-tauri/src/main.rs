@@ -12,8 +12,8 @@ use commands::{
     agent::{interrupt_chat, respond_permission, send_chat_stream},
     avatar::{list_voices, synthesize_edge, synthesize_speech},
     dictation::{
-        dictation_download_model, dictation_model_status, dictation_start, dictation_stop,
-        Dictation,
+        dictation_download_model, dictation_model_status, dictation_start, dictation_start_stream,
+        dictation_stop, dictation_stop_stream, Dictation,
     },
     session::{get_session_history, list_project_sessions},
     library::{
@@ -222,6 +222,8 @@ fn main() {
             // Speech-to-text (mic input, cross-platform Whisper)
             dictation_start,
             dictation_stop,
+            dictation_start_stream,
+            dictation_stop_stream,
             dictation_model_status,
             dictation_download_model,
             // PTY terminal (real embedded claude CLI)

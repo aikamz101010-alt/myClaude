@@ -253,7 +253,7 @@ export function ProjectWindow({ project, onBack }: Props) {
             {/* Character panel — full-body talking avatar with synced subtitles */}
             {tab === 'character' && (
               <div className="flex-1 overflow-hidden">
-                <CharacterView chatId={activeChatId} />
+                <CharacterView chatId={activeChatId} slashCommands={slashCommands} />
               </div>
             )}
 

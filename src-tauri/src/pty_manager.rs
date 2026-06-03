@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter};
 pub struct PtySession {
     pub writer: Box<dyn Write + Send>,
     pub master: Box<dyn portable_pty::MasterPty + Send>,
+    pub child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
 pub struct PtyManager {
@@ -53,7 +54,7 @@ impl PtyManager {
         cmd.env("COLORTERM", "truecolor");
 
         // Spawn claude in the PTY slave
-        let _child = pair.slave.spawn_command(cmd)?;
+        let child = pair.slave.spawn_command(cmd)?;
 
         // Get writer (to send keystrokes to claude)
         let writer = pair.master.take_writer()?;
@@ -64,15 +65,37 @@ impl PtyManager {
         let pid = project_id.clone();
         let app_handle = app.clone();
 
-        // Stream raw PTY output to frontend (xterm.js handles ANSI)
+        // Stream raw PTY output to frontend (xterm.js handles ANSI).
+        // We must NOT split a multi-byte UTF-8 char across reads — Claude's TUI
+        // uses box-drawing/emoji/spinner glyphs, and `from_utf8_lossy` on a
+        // partial sequence would emit replacement chars (�). So we keep any
+        // incomplete trailing bytes and prepend them to the next chunk.
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
+            let mut pending: Vec<u8> = Vec::new();
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                        let _ = app_handle.emit(&format!("pty:output:{}", pid), &data);
+                        pending.extend_from_slice(&buf[..n]);
+                        // Emit the largest valid UTF-8 prefix; hold back the rest.
+                        let valid = match std::str::from_utf8(&pending) {
+                            Ok(_) => pending.len(),
+                            Err(e) => e.valid_up_to(),
+                        };
+                        if valid > 0 {
+                            let s = String::from_utf8_lossy(&pending[..valid]).to_string();
+                            let _ = app_handle.emit(&format!("pty:output:{}", pid), &s);
+                            pending.drain(..valid);
+                        }
+                        // A split char leaves at most 3 trailing bytes. More than
+                        // that means genuinely invalid bytes → flush lossily so we
+                        // never stall or grow unbounded.
+                        if pending.len() >= 4 {
+                            let s = String::from_utf8_lossy(&pending).to_string();
+                            let _ = app_handle.emit(&format!("pty:output:{}", pid), &s);
+                            pending.clear();
+                        }
                     }
                 }
             }
@@ -83,7 +106,7 @@ impl PtyManager {
 
         self.sessions.lock().insert(
             project_id,
-            PtySession { writer, master: pair.master },
+            PtySession { writer, master: pair.master, child },
         );
 
         Ok(())
@@ -118,6 +141,15 @@ impl PtyManager {
     }
 
     pub fn is_running(&self, project_id: &str) -> bool {
-        self.sessions.lock().contains_key(project_id)
+        let mut sessions = self.sessions.lock();
+        match sessions.get_mut(project_id) {
+            Some(session) => match session.child.try_wait() {
+                // Process has exited → prune the dead session so callers can
+                // restart cleanly instead of "reconnecting" to a corpse.
+                Ok(Some(_)) => { sessions.remove(project_id); false }
+                _ => true, // still running (or status unknown)
+            },
+            None => false,
+        }
     }
 }

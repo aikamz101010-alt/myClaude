@@ -8,9 +8,11 @@ import { useAvatarStore } from '@/store/avatarStore'
 import { lipSync } from '@/lib/lipsync'
 import { speak, stopSpeaking } from '@/lib/speak'
 import { cn } from '@/lib/utils'
+import { ChatInput, type AttachedFile } from './ChatInput'
 
 interface Props {
   chatId: string | null
+  slashCommands?: string[]
 }
 
 type Status = 'loading' | 'ready' | 'error'
@@ -291,7 +293,7 @@ function useAutoSpeak(chatId: string | null) {
 
 // ── Panel ─────────────────────────────────────────────────────────────────────
 
-export function CharacterView({ chatId }: Props) {
+export function CharacterView({ chatId, slashCommands }: Props) {
   const vrmUrl = useAvatarStore(s => s.vrmUrl)
   const autoSpeak = useAvatarStore(s => s.autoSpeak)
   const setAutoSpeak = useAvatarStore(s => s.setAutoSpeak)
@@ -299,59 +301,92 @@ export function CharacterView({ chatId }: Props) {
   const [zoom, setZoom] = useState<Zoom>('full')
   const [side, setSide] = useState<'left' | 'right'>('left')
 
+  // Chat wiring (same input as the Chat tab → type + speech-to-text + send)
+  const { chats, sendMessageStream, interruptChat, setChatModel, setChatPermissionMode, setChatYolo } = useSessionStore()
+  const chat = chatId ? chats[chatId] : null
+  const streaming = chat?.status === 'streaming'
+
   useAutoSpeak(chatId)
 
   // Stop narration when leaving the panel.
   useEffect(() => () => stopSpeaking(), [])
 
+  const handleSend = (text: string, files: AttachedFile[]) => {
+    if (!chatId) return
+    const fileRefs = files.map(f => `@${f.path}`).join(' ')
+    const full = fileRefs ? `${fileRefs}\n${text}` : text
+    sendMessageStream(chatId, full)
+  }
+
   return (
-    <div className="relative h-full w-full overflow-hidden bg-gradient-to-b from-surface2/30 via-bg to-bg">
-      {/* 3D stage */}
-      <VrmStage url={vrmUrl} zoom={zoom} onStatus={setStatus} />
+    <div className="flex flex-col h-full w-full overflow-hidden">
+      {/* Stage area */}
+      <div className="relative flex-1 overflow-hidden bg-gradient-to-b from-surface2/30 via-bg to-bg">
+        {/* 3D stage */}
+        <VrmStage url={vrmUrl} zoom={zoom} onStatus={setStatus} />
 
-      {/* Synced subtitle box (left / right of the character) */}
-      <Subtitle side={side} />
+        {/* Synced subtitle box (left / right of the character) */}
+        <Subtitle side={side} />
 
-      {/* Top-left: zoom presets */}
-      <div className="absolute top-3 left-3 z-10 flex items-center gap-0.5 rounded-xl bg-surface/80 backdrop-blur border border-white/10 p-0.5">
-        {ZOOMS.map(z => (
-          <button key={z.key} onClick={() => setZoom(z.key)}
-            className={cn('px-2.5 py-1 rounded-lg text-xs font-mono cursor-pointer transition-colors',
-              zoom === z.key ? 'bg-accent text-bg' : 'text-muted hover:text-text')}>
-            {z.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Top-right: subtitle side + mute */}
-      <div className="absolute top-3 right-3 z-10 flex items-center gap-1">
-        <button onClick={() => setSide(s => (s === 'left' ? 'right' : 'left'))}
-          title={`Subtitle di ${side === 'left' ? 'kiri' : 'kanan'} — klik untuk pindah`}
-          className="p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 text-muted hover:text-text cursor-pointer transition-colors">
-          {side === 'left' ? <PanelLeft className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}
-        </button>
-        <button onClick={() => { if (autoSpeak) stopSpeaking(); setAutoSpeak(!autoSpeak) }}
-          title={autoSpeak ? 'Matikan suara' : 'Aktifkan suara'}
-          className={cn('p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 cursor-pointer transition-colors',
-            autoSpeak ? 'text-accent hover:text-accent/80' : 'text-muted hover:text-text')}>
-          {autoSpeak ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-        </button>
-      </div>
-
-      {/* Loading / error overlays */}
-      {status === 'loading' && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <Loader2 className="w-6 h-6 text-muted animate-spin" />
+        {/* Top-left: zoom presets */}
+        <div className="absolute top-3 left-3 z-10 flex items-center gap-0.5 rounded-xl bg-surface/80 backdrop-blur border border-white/10 p-0.5">
+          {ZOOMS.map(z => (
+            <button key={z.key} onClick={() => setZoom(z.key)}
+              className={cn('px-2.5 py-1 rounded-lg text-xs font-mono cursor-pointer transition-colors',
+                zoom === z.key ? 'bg-accent text-bg' : 'text-muted hover:text-text')}>
+              {z.label}
+            </button>
+          ))}
         </div>
-      )}
-      {status === 'error' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center pointer-events-none">
-          <Bot className="w-10 h-10 text-muted/50" />
-          <p className="text-xs leading-snug text-muted font-mono">
-            VRM tidak ditemukan. Letakkan model di<br />
-            <span className="text-text">public/avatar/character.vrm</span><br />
-            (buat gratis di VRoid Studio)
-          </p>
+
+        {/* Top-right: subtitle side + mute */}
+        <div className="absolute top-3 right-3 z-10 flex items-center gap-1">
+          <button onClick={() => setSide(s => (s === 'left' ? 'right' : 'left'))}
+            title={`Subtitle di ${side === 'left' ? 'kiri' : 'kanan'} — klik untuk pindah`}
+            className="p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 text-muted hover:text-text cursor-pointer transition-colors">
+            {side === 'left' ? <PanelLeft className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}
+          </button>
+          <button onClick={() => { if (autoSpeak) stopSpeaking(); setAutoSpeak(!autoSpeak) }}
+            title={autoSpeak ? 'Matikan suara' : 'Aktifkan suara'}
+            className={cn('p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 cursor-pointer transition-colors',
+              autoSpeak ? 'text-accent hover:text-accent/80' : 'text-muted hover:text-text')}>
+            {autoSpeak ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+          </button>
+        </div>
+
+        {/* Loading / error overlays */}
+        {status === 'loading' && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <Loader2 className="w-6 h-6 text-muted animate-spin" />
+          </div>
+        )}
+        {status === 'error' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center pointer-events-none">
+            <Bot className="w-10 h-10 text-muted/50" />
+            <p className="text-xs leading-snug text-muted font-mono">
+              VRM tidak ditemukan. Letakkan model di<br />
+              <span className="text-text">public/avatar/character.vrm</span><br />
+              (buat gratis di VRoid Studio)
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Type + speech-to-text + send — same input as the Chat tab */}
+      {chat && (
+        <div className="flex-shrink-0 border-t border-white/5 bg-bg/60">
+          <ChatInput
+            onSend={handleSend}
+            onStop={() => chatId && interruptChat(chatId)}
+            streaming={!!streaming}
+            slashCommands={slashCommands}
+            model={chat.model}
+            onModelChange={m => chatId && setChatModel(chatId, m)}
+            permissionMode={chat.permissionMode}
+            onPermissionModeChange={m => chatId && setChatPermissionMode(chatId, m)}
+            yolo={chat.yolo}
+            onYoloChange={v => chatId && setChatYolo(chatId, v)}
+          />
         </div>
       )}
     </div>

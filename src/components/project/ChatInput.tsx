@@ -76,6 +76,11 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const backdropRef = useRef<HTMLDivElement>(null)
 
+  // ── Live dictation refs ───────────────────────────────────────
+  const dictBaseRef = useRef('')          // text already in the box when dictation started
+  const listeningRef = useRef(false)      // latest `listening` for event handlers
+  const submitRef = useRef<(value: string) => void>(() => {})  // latest submit fn for auto-submit
+
   // Classify /name & @name tokens by library type → color
   const { items } = useLibraryStore()
   const classify = useMemo(() => buildClassifier(items), [items])
@@ -228,37 +233,66 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
     }
   }
 
+  // Merge the dictation transcript with whatever text was already in the box.
+  const compose = useCallback((dict: string) => {
+    const base = dictBaseRef.current
+    if (!base) return dict
+    if (!dict) return base
+    return base.replace(/\s*$/, '') + ' ' + dict
+  }, [])
+
+  // Live transcript updates + hands-free auto-submit after a long pause.
+  useEffect(() => {
+    const unPartial = listen<{ text: string }>('dictation:partial', e => {
+      if (!listeningRef.current) return
+      setText(compose(e.payload.text))
+    })
+    const unAuto = listen<{ text: string }>('dictation:autosubmit', e => {
+      if (!listeningRef.current) return
+      const full = compose(e.payload.text)
+      listeningRef.current = false
+      setListening(false)
+      invoke('dictation_stop_stream').catch(() => {})
+      submitRef.current(full)
+    })
+    return () => { unPartial.then(f => f()); unAuto.then(f => f()) }
+  }, [compose])
+
+  const stopDictation = useCallback(async () => {
+    if (!listeningRef.current) return
+    listeningRef.current = false
+    setListening(false)
+    setTranscribing(true)
+    try {
+      const result = await invoke<string>('dictation_stop_stream')
+      const composed = compose((result ?? '').trim())
+      if (composed) setText(composed)
+    } catch (err) {
+      console.warn('[dictation] stop failed:', err)
+    } finally {
+      setTranscribing(false)
+      textareaRef.current?.focus()
+    }
+  }, [compose])
+
   const toggleVoice = async () => {
     if (transcribing) return
+    if (listening) { await stopDictation(); return }
 
-    if (listening) {
-      // Stop → transcribe → append to the input.
-      setListening(false)
-      setTranscribing(true)
-      try {
-        const result = await invoke<string>('dictation_stop', { lang: 'id' })
-        const t = (result ?? '').trim()
-        if (t) setText(prev => (prev.trim() ? prev.replace(/\s*$/, ' ') : '') + t)
-      } catch (err) {
-        console.warn('[dictation] stop failed:', err)
-      } finally {
-        setTranscribing(false)
-        textareaRef.current?.focus()
-      }
-      return
-    }
-
-    // Not listening yet.
+    // Not listening yet — ensure the model is ready first.
     if (modelState === 'downloading') return
     if (modelState !== 'ready') {
       await downloadModel()
-      return // user taps again to start recording once the model is ready
+      return // user taps again to start once the model is ready
     }
+    dictBaseRef.current = text
     try {
-      await invoke('dictation_start')
+      await invoke('dictation_start_stream', { lang: 'id' })
+      listeningRef.current = true
       setListening(true)
     } catch (err) {
       console.warn('[dictation] start failed:', err)
+      listeningRef.current = false
       setListening(false)
     }
   }
@@ -271,8 +305,8 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
   }
 
   // ── Submit ────────────────────────────────────────────────────
-  const handleSubmit = () => {
-    const trimmed = text.trim()
+  const submitText = useCallback((value: string) => {
+    const trimmed = value.trim()
     if (!trimmed && files.length === 0) return
     if (streaming) return
     onSend(trimmed, files)
@@ -280,7 +314,12 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
     setFiles([])
     setShowCmds(false)
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
-  }
+  }, [files, streaming, onSend])
+
+  // Keep the auto-submit handler pointed at the latest submit closure.
+  submitRef.current = submitText
+
+  const handleSubmit = () => submitText(text)
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (showCmds && e.key === 'Tab' && filteredCmds.length > 0) {
@@ -631,9 +670,9 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
             title={
               modelState === 'missing' ? 'Unduh model suara (~148 MB) untuk input mic'
               : modelState === 'downloading' ? `Mengunduh model suara… ${downloadPct}%`
-              : transcribing ? 'Mentranskrip…'
-              : listening ? 'Berhenti & masukkan (Bahasa Indonesia)'
-              : 'Input suara — Bahasa Indonesia'
+              : transcribing ? 'Menyelesaikan transkrip…'
+              : listening ? 'Berhenti mendengarkan (Bahasa Indonesia)'
+              : 'Input suara langsung — teks otomatis terketik; diam 3 dtk = kirim'
             }
           >
             {modelState === 'downloading' ? (
@@ -676,7 +715,7 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
       {listening && (
         <div className="flex items-center gap-1.5 mt-1.5 px-1">
           <Loader2 className="w-3 h-3 text-error animate-spin" />
-          <span className="text-xs font-mono text-muted">Mendengarkan… (Bahasa Indonesia)</span>
+          <span className="text-xs font-mono text-muted">Mendengarkan… bicara untuk mengetik · diam 3 dtk = kirim otomatis</span>
         </div>
       )}
     </div>

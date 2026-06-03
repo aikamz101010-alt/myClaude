@@ -29,16 +29,20 @@ export function sanitizeForSpeech(text: string, maxLen = 600): string {
   return t
 }
 
+// Per user preference: ALWAYS use a female Indonesian voice — locked here so no
+// setting (now or later) can switch the avatar to a male voice.
+const FEMALE_EDGE_VOICE = 'id-ID-GadisNeural' // Edge neural, female
+const FEMALE_LOCAL_VOICE = 'Damayanti'        // macOS `say` id_ID, female
+
 /** macOS `say` (offline) synthesis → base64 WAV. */
 function synthLocal(text: string): Promise<string> {
-  const { voice, rate } = useAvatarStore.getState()
-  return invoke<string>('synthesize_speech', { text, voice: voice || null, rate: rate || null })
+  const { rate } = useAvatarStore.getState()
+  return invoke<string>('synthesize_speech', { text, voice: FEMALE_LOCAL_VOICE, rate: rate || null })
 }
 
 /** Microsoft Edge neural synthesis (free, realistic, needs internet) → base64 MP3. */
 function synthEdge(text: string): Promise<string> {
-  const { edgeVoice } = useAvatarStore.getState()
-  return invoke<string>('synthesize_edge', { text, voice: edgeVoice || null, rate: null })
+  return invoke<string>('synthesize_edge', { text, voice: FEMALE_EDGE_VOICE, rate: null })
 }
 
 /** Synthesize + play `text` through the avatar (lip-sync driven by the audio). */
