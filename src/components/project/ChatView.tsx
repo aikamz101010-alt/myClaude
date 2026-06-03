@@ -242,11 +242,13 @@ export function ChatView({ chatId, slashCommands }: Props) {
   const totalOut  = chat?.totalOutputTokens ?? 0
   const pendingPermission = chat?.pendingPermission ?? null
 
-  // Subscribe to stream events
+  // Subscribe to stream events. Guard the async race: if cleanup runs before
+  // the listener resolves, unlisten immediately so we never leak a duplicate.
   useEffect(() => {
+    let cancelled = false
     let cancel: (() => void) | null = null
-    subscribeChat(chatId).then(fn => { cancel = fn })
-    return () => { cancel?.() }
+    subscribeChat(chatId).then(fn => { if (cancelled) fn(); else cancel = fn })
+    return () => { cancelled = true; cancel?.() }
   }, [chatId])
 
   // Auto-scroll

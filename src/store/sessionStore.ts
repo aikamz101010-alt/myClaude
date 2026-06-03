@@ -2,6 +2,11 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
+// At most ONE active Tauri listener per chat — guards against duplicate
+// subscriptions (StrictMode double-mount, remounts, concurrent subscribeChat)
+// which would otherwise process every stream event twice → doubled replies.
+const chatListeners = new Map<string, UnlistenFn>()
+
 // ── Types ─────────────────────────────────────────────────────────
 
 export interface ToolUse {
@@ -469,7 +474,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         }
       })
     })
-    return unlisten
+
+    // Dedup: if a listener for this chat already exists (or one registered while
+    // we were awaiting), remove it so only this newest one stays active.
+    const prev = chatListeners.get(chatId)
+    if (prev) prev()
+    chatListeners.set(chatId, unlisten)
+
+    return () => {
+      unlisten()
+      if (chatListeners.get(chatId) === unlisten) chatListeners.delete(chatId)
+    }
   },
 
   sendMessageStream: async (chatId, content) => {

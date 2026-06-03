@@ -120,6 +120,8 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
     let idleGestureUntil = 0, nextIdleGestureAt = 4, idleGestureSide: 'l' | 'r' = 'r'
     // Standby pose cycling (VRoid-style): hold a pose, then switch to a random one.
     let standbyIdx = 0, standbyUntil = 0
+    // Double-click → glance: the character turns its head toward that screen point.
+    let lookYaw = 0, lookPitch = 0, lookUntil = 0
 
     const lerpRot = (
       b: THREE.Object3D | null | undefined,
@@ -127,6 +129,17 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
       target: number,
       k = 0.18,
     ) => { if (b) b.rotation[axis] += (target - b.rotation[axis]) * k }
+
+    // Double-click anywhere on the stage → the character glances at that point.
+    const onDblClick = (e: MouseEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect()
+      const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1   // -1 (left) .. 1 (right)
+      const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1   // -1 (top) .. 1 (bottom)
+      lookYaw = THREE.MathUtils.clamp(-nx, -1, 1) * 0.8           // turn head toward the clicked side
+      lookPitch = THREE.MathUtils.clamp(ny, -1, 1) * 0.5         // tilt up/down toward it
+      lookUntil = clock.elapsedTime + 3.5                        // hold the glance briefly
+    }
+    renderer.domElement.addEventListener('dblclick', onDblClick)
 
     const animate = () => {
       raf = requestAnimationFrame(animate)
@@ -192,8 +205,11 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
         // ── Eyes: lively gaze. Thinking → steady up-aside ponder; otherwise the
         // eyes dart to a new target every 1-3s (saccade) then hold. ──
         const interactive = interactiveRef.current
+        const lookActive = time < lookUntil
         if (thinking) {
           gazeTX = -0.3; gazeTY = -0.35
+        } else if (lookActive) {
+          gazeTX = 0; gazeTY = 0   // eyes forward along the turned head
         } else if (interactive && time > nextSaccadeAt) {
           gazeTX = (Math.random() * 2 - 1) * 0.6
           gazeTY = (Math.random() * 2 - 1) * 0.4
@@ -294,6 +310,7 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
           } else {
             hx = lookX; hy = lookY; hz = Math.sin(time * 0.6) * 0.02
           }
+          if (lookActive) { hy = lookYaw; hx = lookPitch; hz = 0 }  // double-click glance
           head.rotation.x += (hx - head.rotation.x) * 0.2
           head.rotation.y += (hy - head.rotation.y) * 0.2
           head.rotation.z += (hz - head.rotation.z) * 0.2
@@ -321,6 +338,7 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
       if (vrm) VRMUtils.deepDispose(vrm.scene)
       ground.geometry.dispose()
       ;(ground.material as THREE.Material).dispose()
+      renderer.domElement.removeEventListener('dblclick', onDblClick)
       renderer.dispose()
       renderer.domElement.remove()
     }
