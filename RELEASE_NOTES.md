@@ -1,10 +1,12 @@
-# Claude X v0.2.0
+# Claude X v0.2.1
 
 Rilis ini fokus pada perbaikan koneksi chat (Agent SDK) dan kemudahan update.
 
 ## ✨ Baru
 - **Auto-cek update saat aplikasi dibuka.** Jika ada versi baru, muncul jendela berisi versi sekarang vs versi baru, tanggal rilis, catatan rilis, dan tombol **Update** (unduh + pasang + restart otomatis).
 - **Pengaturan Node.js (Settings → Node.js Runtime).** Aplikasi otomatis mendeteksi semua versi Node.js yang terpasang, menampilkan versi yang sedang dipakai, dan kamu bisa memilih versi tertentu atau **Auto** (pilih versi terbaru otomatis). Versi < 18 ditandai dan dinonaktifkan.
+- **Tambah library (skill/agent/plugin) langsung dari kolom chat** lewat tombol picker — klik untuk menyisipkan token `/skill`, `@agent`, `@plugin`.
+- **Input instruksi di popup konfirmasi tool.** Selain Allow/Deny/Always, kamu bisa mengetik instruksi untuk Claude (tolak + arahkan ulang).
 
 ## 🐛 Perbaikan
 - **Memperbaiki error "object not disposable" / chat gagal terhubung** saat aplikasi dibuka dari hasil install DMG. Penyebabnya aplikasi memilih Node.js lama (mis. v16) yang tidak didukung Agent SDK. Sekarang aplikasi selalu memilih Node.js versi terbaru yang **≥ 18**.
