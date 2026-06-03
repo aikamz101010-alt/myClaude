@@ -1,18 +1,20 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { VRM, VRMLoaderPlugin, VRMUtils, VRMExpressionPresetName } from '@pixiv/three-vrm'
-import { Volume2, VolumeX, Loader2, Bot, PanelLeft, PanelRight } from 'lucide-react'
+import { Volume2, VolumeX, Loader2, Bot, PanelLeft, PanelRight, Settings, X, ScrollText } from 'lucide-react'
 import { useSessionStore } from '@/store/sessionStore'
 import { useAvatarStore } from '@/store/avatarStore'
 import { lipSync } from '@/lib/lipsync'
-import { speak, stopSpeaking } from '@/lib/speak'
+import { speakMessageOnce, stopSpeaking } from '@/lib/speak'
 import { cn } from '@/lib/utils'
 import { ChatInput, type AttachedFile } from './ChatInput'
+import { AvatarVoiceSettings } from '@/components/settings/AvatarVoiceSettings'
 
 interface Props {
   chatId: string | null
   slashCommands?: string[]
+  active?: boolean   // panel is the visible tab (gates narration + rendering)
 }
 
 type Status = 'loading' | 'ready' | 'error'
@@ -27,7 +29,13 @@ const ZOOMS: { key: Zoom; label: string }[] = [
 
 // ── Vanilla three.js VRM stage with walking, gestures & zoom framing ──────────
 
-function VrmStage({ url, zoom, onStatus }: { url: string; zoom: Zoom; onStatus: (s: Status) => void }) {
+function VrmStage({ url, zoom, thinkingRef, activeRef, onStatus }: {
+  url: string
+  zoom: Zoom
+  thinkingRef: MutableRefObject<boolean>
+  activeRef: MutableRefObject<boolean>
+  onStatus: (s: Status) => void
+}) {
   const mountRef = useRef<HTMLDivElement>(null)
   const zoomRef = useRef<Zoom>(zoom)
   zoomRef.current = zoom
@@ -110,12 +118,24 @@ function VrmStage({ url, zoom, onStatus }: { url: string; zoom: Zoom; onStatus: 
     let camX = 0             // smoothed camera x (follows model)
     let legPhase = 0
     let faceAngle = 0        // smoothed Y rotation
+    let idleDwell = 0        // seconds spent continuously idle (gates walking)
+
+    const lerpRot = (
+      b: THREE.Object3D | null | undefined,
+      axis: 'x' | 'y' | 'z',
+      target: number,
+      k = 0.18,
+    ) => { if (b) b.rotation[axis] += (target - b.rotation[axis]) * k }
 
     const animate = () => {
       raf = requestAnimationFrame(animate)
+      // Pause all work while the panel is hidden (saves GPU / battery).
+      if (!activeRef.current) return
       const delta = Math.min(clock.getDelta(), 0.05)
       const time = clock.elapsedTime
-      const speaking = lipSync.speaking
+
+      const thinking = thinkingRef.current            // waiting for / receiving a reply
+      const speaking = !thinking && lipSync.speaking   // narrating the reply
 
       // ── Camera framing (smooth zoom) ──
       const { focusY, frameH } = framingFor(zoomRef.current)
@@ -132,52 +152,69 @@ function VrmStage({ url, zoom, onStatus }: { url: string; zoom: Zoom; onStatus: 
         const bone = (n: Parameters<NonNullable<typeof H>['getNormalizedBoneNode']>[0]) =>
           H?.getNormalizedBoneNode(n)
 
-        // ── Walking: idle paces left↔right; speaking returns to centre & faces front ──
-        const targetX = speaking ? 0 : Math.sin(time * 0.23) * 0.95
+        const lUL = bone('leftUpperLeg');  const rUL = bone('rightUpperLeg')
+        const lLL = bone('leftLowerLeg');  const rLL = bone('rightLowerLeg')
+        const lUA = bone('leftUpperArm');  const rUA = bone('rightUpperArm')
+        const lLA = bone('leftLowerArm');  const rLA = bone('rightLowerArm')
+
+        // ── Walk ONLY when genuinely idle for a moment (never while thinking/speaking) ──
+        const canWalk = !thinking && !speaking
+        idleDwell = canWalk ? idleDwell + delta : 0
+        const wander = idleDwell > 2.5   // settle first, then pace around
+        const targetX = wander ? Math.sin(time * 0.23) * 0.95 : 0
         const prevX = modelX
         modelX += (targetX - modelX) * Math.min(1, delta * 1.4)
         const vx = (modelX - prevX) / (delta || 1 / 60)
-        const moving = Math.abs(vx) > 0.06 && !speaking
+        const moving = Math.abs(vx) > 0.06
         vrm.scene.position.x = modelX
         ground.position.x = modelX
 
-        // Face direction of travel while walking; face the camera while speaking/idle-still.
+        // Face travel direction while walking; face the camera otherwise.
         const targetAngle = moving ? (vx > 0 ? Math.PI / 2 : -Math.PI / 2) : 0
         faceAngle += (targetAngle - faceAngle) * Math.min(1, delta * 6)
         vrm.scene.rotation.y = faceAngle
 
-        // Walk cycle on the legs (amplitude scales with speed).
+        // Legs walk cycle (amplitude scales with speed).
         const walkAmp = Math.min(1, Math.abs(vx) * 1.6)
         legPhase += delta * 9 * walkAmp
-        const lUL = bone('leftUpperLeg');  const rUL = bone('rightUpperLeg')
-        const lLL = bone('leftLowerLeg');  const rLL = bone('rightLowerLeg')
         if (lUL) lUL.rotation.x = Math.sin(legPhase) * 0.5 * walkAmp
         if (rUL) rUL.rotation.x = Math.sin(legPhase + Math.PI) * 0.5 * walkAmp
         if (lLL) lLL.rotation.x = Math.max(0, -Math.sin(legPhase)) * 0.7 * walkAmp
         if (rLL) rLL.rotation.x = Math.max(0, -Math.sin(legPhase + Math.PI)) * 0.7 * walkAmp
 
-        // ── Face: lip-sync + blink + subtle smile ──
-        em?.setValue(VRMExpressionPresetName.Aa, lipSync.mouth())
+        // ── Expressions: blink + mouth + smile + thinking gaze ──
         const phase = time % 4
         const blink = phase > 3.8 ? Math.sin(((phase - 3.8) / 0.2) * Math.PI) : 0
         em?.setValue(VRMExpressionPresetName.Blink, blink)
-        em?.setValue(VRMExpressionPresetName.Happy, speaking ? 0.3 : 0.12)
+        em?.setValue(VRMExpressionPresetName.Aa, thinking ? 0 : lipSync.mouth())
+        em?.setValue(VRMExpressionPresetName.Happy, speaking ? 0.3 : thinking ? 0.05 : 0.12)
+        if (em) {
+          const look = thinking ? 1 : 0
+          try {
+            em.setValue(VRMExpressionPresetName.LookUp, 0.35 * look)
+            em.setValue(VRMExpressionPresetName.LookLeft, 0.30 * look)
+          } catch { /* some models lack look-direction expressions */ }
+        }
 
-        // ── Arms: T-pose → down; gesture while speaking, swing while walking ──
+        // ── Arm pose targets (lerped → smooth transitions between modes) ──
         const gesture = speaking ? 1 : 0
         const armSwing = moving ? Math.sin(legPhase) * 0.25 : 0
-        const lUA = bone('leftUpperArm');  const rUA = bone('rightUpperArm')
-        const lLA = bone('leftLowerArm');  const rLA = bone('rightLowerArm')
-        if (lUA) {
-          lUA.rotation.z = -1.40 + Math.sin(time * 0.9) * 0.04
-          lUA.rotation.x = Math.sin(time * 0.7) * 0.05 + gesture * Math.sin(time * 3.0) * 0.18 - armSwing
+        let lUAz = -1.40 + Math.sin(time * 0.9) * 0.04
+        let lUAx = Math.sin(time * 0.7) * 0.05 + gesture * Math.sin(time * 3.0) * 0.18 - armSwing
+        let rUAz = 1.40 + Math.sin(time * 0.9 + 1.0) * 0.04
+        let rUAx = Math.sin(time * 0.7 + 0.5) * 0.05 + gesture * Math.sin(time * 3.2 + 1) * 0.18 + armSwing
+        let lLAz = -0.20 - gesture * Math.abs(Math.sin(time * 3.0)) * 0.28
+        let rLAz = 0.20 + gesture * Math.abs(Math.sin(time * 3.2 + 1)) * 0.28
+        if (thinking) {
+          // Pondering: right hand up toward the chin, left arm relaxed down.
+          rUAz = 0.95
+          rUAx = -0.35 + Math.sin(time * 0.8) * 0.03
+          rLAz = 1.45
+          lUAz = -1.32; lUAx = 0; lLAz = -0.25
         }
-        if (rUA) {
-          rUA.rotation.z = 1.40 + Math.sin(time * 0.9 + 1.0) * 0.04
-          rUA.rotation.x = Math.sin(time * 0.7 + 0.5) * 0.05 + gesture * Math.sin(time * 3.2 + 1) * 0.18 + armSwing
-        }
-        if (lLA) lLA.rotation.z = -0.20 - gesture * Math.abs(Math.sin(time * 3.0)) * 0.28
-        if (rLA) rLA.rotation.z = 0.20 + gesture * Math.abs(Math.sin(time * 3.2 + 1)) * 0.28
+        lerpRot(lUA, 'z', lUAz); lerpRot(lUA, 'x', lUAx)
+        lerpRot(rUA, 'z', rUAz); lerpRot(rUA, 'x', rUAx)
+        lerpRot(lLA, 'z', lLAz); lerpRot(rLA, 'z', rLAz)
 
         // ── Body: weight shift + breathing ──
         const hips = bone('hips'); const spine = bone('spine')
@@ -187,20 +224,26 @@ function VrmStage({ url, zoom, onStatus }: { url: string; zoom: Zoom; onStatus: 
         if (spine) spine.rotation.y = Math.sin(time * 0.4) * 0.03 + gesture * Math.sin(time * 1.1) * 0.05
         if (chest) chest.rotation.x = Math.sin(time * 1.3) * 0.016
 
-        // ── Head: looks around; nods when speaking ──
+        // ── Head: thinking gaze (up & aside) / nods when speaking / idle look ──
         const head = bone('head')
         if (head) {
           const lookY = Math.sin(time * 0.37) * 0.18 + Math.sin(time * 0.13) * 0.12
           const lookX = Math.sin(time * 0.29) * 0.06
-          if (speaking) {
-            head.rotation.x = lookX * 0.4 + Math.sin(time * 5.5) * 0.05 + Math.sin(time * 1.3) * 0.03
-            head.rotation.y = lookY * 0.5 + Math.sin(time * 0.9) * 0.06
-            head.rotation.z = Math.sin(time * 1.1) * 0.02
+          let hx: number, hy: number, hz: number
+          if (thinking) {
+            hx = -0.12 + Math.sin(time * 0.8) * 0.02   // look up, slow ponder
+            hy = 0.10 + Math.sin(time * 0.5) * 0.05
+            hz = 0.10
+          } else if (speaking) {
+            hx = lookX * 0.4 + Math.sin(time * 5.5) * 0.05 + Math.sin(time * 1.3) * 0.03
+            hy = lookY * 0.5 + Math.sin(time * 0.9) * 0.06
+            hz = Math.sin(time * 1.1) * 0.02
           } else {
-            head.rotation.x = lookX
-            head.rotation.y = lookY
-            head.rotation.z = Math.sin(time * 0.6) * 0.02
+            hx = lookX; hy = lookY; hz = Math.sin(time * 0.6) * 0.02
           }
+          head.rotation.x += (hx - head.rotation.x) * 0.2
+          head.rotation.y += (hy - head.rotation.y) * 0.2
+          head.rotation.z += (hz - head.rotation.z) * 0.2
         }
 
         vrm.update(delta)
@@ -263,16 +306,15 @@ function Subtitle({ side }: { side: 'left' | 'right' }) {
   )
 }
 
-// ── Auto-speak: narrate each completed assistant reply ────────────────────────
+// ── Auto-speak: narrate each completed assistant reply (when panel active) ────
 
-function useAutoSpeak(chatId: string | null) {
+function useAutoSpeak(chatId: string | null, active: boolean) {
   const status = useSessionStore(s => (chatId ? s.chats[chatId]?.status : undefined))
   const messages = useSessionStore(s => (chatId ? s.chats[chatId]?.messages : undefined))
   const autoSpeak = useAvatarStore(s => s.autoSpeak)
-  const lastSpoken = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!autoSpeak || status !== 'idle' || !messages?.length) return
+    if (!active || !autoSpeak || status !== 'idle' || !messages?.length) return
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
       if (m.role !== 'assistant') continue
@@ -282,31 +324,73 @@ function useAutoSpeak(chatId: string | null) {
         .join(' ')
         .trim() || m.content
       if (!text) return
-      if (m.id !== lastSpoken.current) {
-        lastSpoken.current = m.id
-        speak(text)
-      }
+      // Global dedup → no double narration, no re-speak on tab switch / remount.
+      speakMessageOnce(m.id, text)
       return
     }
-  }, [status, messages, autoSpeak])
+  }, [status, messages, autoSpeak, active])
+}
+
+// ── Transcript: the conversation log, streams the reply live ───────────────────
+
+function Transcript({ chatId }: { chatId: string | null }) {
+  const messages = useSessionStore(s => (chatId ? s.chats[chatId]?.messages : undefined)) ?? []
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = ref.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [messages])
+
+  return (
+    <div ref={ref} className="w-[300px] flex-shrink-0 border-l border-white/5 bg-bg/40 overflow-y-auto p-3 space-y-2">
+      {messages.length === 0 && (
+        <p className="text-xs font-mono text-muted/60">Belum ada percakapan.</p>
+      )}
+      {messages.map(m => {
+        const text = (m.blocks ?? [])
+          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+          .map(b => b.text)
+          .join(' ')
+          .trim() || m.content
+        if (!text) return null
+        const user = m.role === 'user'
+        return (
+          <div key={m.id} className={cn('rounded-xl px-2.5 py-1.5 text-xs leading-relaxed',
+            user ? 'bg-accent/10 text-text ml-5' : 'bg-surface2/50 text-text mr-5')}>
+            <span className="block text-[10px] font-mono text-muted/60 mb-0.5">{user ? 'You' : 'Claude'}</span>
+            <span className="whitespace-pre-wrap break-words">{text}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 // ── Panel ─────────────────────────────────────────────────────────────────────
 
-export function CharacterView({ chatId, slashCommands }: Props) {
+export function CharacterView({ chatId, slashCommands, active = true }: Props) {
   const vrmUrl = useAvatarStore(s => s.vrmUrl)
   const autoSpeak = useAvatarStore(s => s.autoSpeak)
   const setAutoSpeak = useAvatarStore(s => s.setAutoSpeak)
   const [status, setStatus] = useState<Status>('loading')
   const [zoom, setZoom] = useState<Zoom>('full')
   const [side, setSide] = useState<'left' | 'right'>('left')
+  const [showSettings, setShowSettings] = useState(false)
+  const [showLog, setShowLog] = useState(true)
 
   // Chat wiring (same input as the Chat tab → type + speech-to-text + send)
   const { chats, sendMessageStream, interruptChat, setChatModel, setChatPermissionMode, setChatYolo } = useSessionStore()
   const chat = chatId ? chats[chatId] : null
   const streaming = chat?.status === 'streaming'
 
-  useAutoSpeak(chatId)
+  // Live state read by the render loop (refs avoid re-creating the three.js scene).
+  const thinkingRef = useRef(false)
+  thinkingRef.current = !!streaming   // waiting for / receiving a reply → thinking pose, no walking
+  const activeRef = useRef(active)
+  activeRef.current = active
+
+  useAutoSpeak(chatId, active)
 
   // Stop narration when leaving the panel.
   useEffect(() => () => stopSpeaking(), [])
@@ -320,56 +404,98 @@ export function CharacterView({ chatId, slashCommands }: Props) {
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden">
-      {/* Stage area */}
-      <div className="relative flex-1 overflow-hidden bg-gradient-to-b from-surface2/30 via-bg to-bg">
-        {/* 3D stage */}
-        <VrmStage url={vrmUrl} zoom={zoom} onStatus={setStatus} />
+      {/* Stage + transcript */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Stage area */}
+        <div className="relative flex-1 overflow-hidden bg-gradient-to-b from-surface2/30 via-bg to-bg">
+          {/* 3D stage */}
+          <VrmStage url={vrmUrl} zoom={zoom} thinkingRef={thinkingRef} activeRef={activeRef} onStatus={setStatus} />
 
-        {/* Synced subtitle box (left / right of the character) */}
-        <Subtitle side={side} />
+          {/* Synced subtitle box (left / right of the character) */}
+          <Subtitle side={side} />
 
-        {/* Top-left: zoom presets */}
-        <div className="absolute top-3 left-3 z-10 flex items-center gap-0.5 rounded-xl bg-surface/80 backdrop-blur border border-white/10 p-0.5">
-          {ZOOMS.map(z => (
-            <button key={z.key} onClick={() => setZoom(z.key)}
-              className={cn('px-2.5 py-1 rounded-lg text-xs font-mono cursor-pointer transition-colors',
-                zoom === z.key ? 'bg-accent text-bg' : 'text-muted hover:text-text')}>
-              {z.label}
+          {/* Thinking indicator */}
+          {streaming && (
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 rounded-full bg-bg/80 backdrop-blur border border-white/10 px-3 py-1.5">
+              <span className="flex gap-1">
+                {[0, 150, 300].map(d => <span key={d} className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: `${d}ms` }} />)}
+              </span>
+              <span className="text-xs font-mono text-muted">sedang berpikir…</span>
+            </div>
+          )}
+
+          {/* Top-left: zoom presets */}
+          <div className="absolute top-3 left-3 z-10 flex items-center gap-0.5 rounded-xl bg-surface/80 backdrop-blur border border-white/10 p-0.5">
+            {ZOOMS.map(z => (
+              <button key={z.key} onClick={() => setZoom(z.key)}
+                className={cn('px-2.5 py-1 rounded-lg text-xs font-mono cursor-pointer transition-colors',
+                  zoom === z.key ? 'bg-accent text-bg' : 'text-muted hover:text-text')}>
+                {z.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Top-right: transcript toggle + subtitle side + mute + settings */}
+          <div className="absolute top-3 right-3 z-10 flex items-center gap-1">
+            <button onClick={() => setShowLog(v => !v)}
+              title={showLog ? 'Sembunyikan log percakapan' : 'Tampilkan log percakapan'}
+              className={cn('p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 cursor-pointer transition-colors',
+                showLog ? 'text-accent' : 'text-muted hover:text-text')}>
+              <ScrollText className="w-4 h-4" />
             </button>
-          ))}
+            <button onClick={() => setSide(s => (s === 'left' ? 'right' : 'left'))}
+              title={`Subtitle di ${side === 'left' ? 'kiri' : 'kanan'} — klik untuk pindah`}
+              className="p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 text-muted hover:text-text cursor-pointer transition-colors">
+              {side === 'left' ? <PanelLeft className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}
+            </button>
+            <button onClick={() => { if (autoSpeak) stopSpeaking(); setAutoSpeak(!autoSpeak) }}
+              title={autoSpeak ? 'Matikan suara' : 'Aktifkan suara'}
+              className={cn('p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 cursor-pointer transition-colors',
+                autoSpeak ? 'text-accent hover:text-accent/80' : 'text-muted hover:text-text')}>
+              {autoSpeak ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            </button>
+            <button onClick={() => setShowSettings(v => !v)}
+              title="Pengaturan avatar & suara"
+              className={cn('p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 cursor-pointer transition-colors',
+                showSettings ? 'text-accent' : 'text-muted hover:text-text')}>
+              <Settings className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Settings panel (avatar & voice) */}
+          {showSettings && (
+            <div className="absolute top-14 right-3 z-30 w-72 max-h-[calc(100%-4.5rem)] overflow-y-auto rounded-xl border border-white/10 bg-surface/95 backdrop-blur shadow-2xl p-2">
+              <div className="flex items-center justify-between px-1 pb-1">
+                <span className="text-xs font-mono font-semibold text-text">Pengaturan</span>
+                <button onClick={() => setShowSettings(false)}
+                  className="p-1 text-muted hover:text-text cursor-pointer rounded">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <AvatarVoiceSettings />
+            </div>
+          )}
+
+          {/* Loading / error overlays */}
+          {status === 'loading' && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <Loader2 className="w-6 h-6 text-muted animate-spin" />
+            </div>
+          )}
+          {status === 'error' && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center pointer-events-none">
+              <Bot className="w-10 h-10 text-muted/50" />
+              <p className="text-xs leading-snug text-muted font-mono">
+                VRM tidak ditemukan. Letakkan model di<br />
+                <span className="text-text">public/avatar/character.vrm</span><br />
+                (buat gratis di VRoid Studio)
+              </p>
+            </div>
+          )}
         </div>
 
-        {/* Top-right: subtitle side + mute */}
-        <div className="absolute top-3 right-3 z-10 flex items-center gap-1">
-          <button onClick={() => setSide(s => (s === 'left' ? 'right' : 'left'))}
-            title={`Subtitle di ${side === 'left' ? 'kiri' : 'kanan'} — klik untuk pindah`}
-            className="p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 text-muted hover:text-text cursor-pointer transition-colors">
-            {side === 'left' ? <PanelLeft className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}
-          </button>
-          <button onClick={() => { if (autoSpeak) stopSpeaking(); setAutoSpeak(!autoSpeak) }}
-            title={autoSpeak ? 'Matikan suara' : 'Aktifkan suara'}
-            className={cn('p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 cursor-pointer transition-colors',
-              autoSpeak ? 'text-accent hover:text-accent/80' : 'text-muted hover:text-text')}>
-            {autoSpeak ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-          </button>
-        </div>
-
-        {/* Loading / error overlays */}
-        {status === 'loading' && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <Loader2 className="w-6 h-6 text-muted animate-spin" />
-          </div>
-        )}
-        {status === 'error' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center pointer-events-none">
-            <Bot className="w-10 h-10 text-muted/50" />
-            <p className="text-xs leading-snug text-muted font-mono">
-              VRM tidak ditemukan. Letakkan model di<br />
-              <span className="text-text">public/avatar/character.vrm</span><br />
-              (buat gratis di VRoid Studio)
-            </p>
-          </div>
-        )}
+        {/* Conversation log (same session as Chat) */}
+        {showLog && <Transcript chatId={chatId} />}
       </div>
 
       {/* Type + speech-to-text + send — same input as the Chat tab */}

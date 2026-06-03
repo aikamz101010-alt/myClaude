@@ -32,6 +32,7 @@ export function ProjectWindow({ project, onBack }: Props) {
   const [showAddURL, setShowAddURL] = useState(false)
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
   const [showFolder, setShowFolder] = useState(false)  // folder tree collapsed by default
+  const [charOpened, setCharOpened] = useState(false)  // mount Character panel once, then keep it
   const [openFiles, setOpenFiles] = useState<string[]>([])
   const [activeFile, setActiveFile] = useState<string | null>(null)
   const contractRef = useRef<ContractEditorHandle>(null)
@@ -80,6 +81,10 @@ export function ProjectWindow({ project, onBack }: Props) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, projectChatIds.length])
+
+  // Mount the Character panel the first time it's opened, then keep it mounted
+  // (hidden) so it doesn't re-initialize / reload the VRM on every tab switch.
+  useEffect(() => { if (tab === 'character') setCharOpened(true) }, [tab])
 
   const handleNewChat = () => {
     const id = createChat(project.id, project.path)
@@ -250,10 +255,11 @@ export function ProjectWindow({ project, onBack }: Props) {
               <TerminalView projectId={project.id} workingDir={project.path} autoStart={tab === 'terminal'} />
             </div>
 
-            {/* Character panel — full-body talking avatar with synced subtitles */}
-            {tab === 'character' && (
-              <div className="flex-1 overflow-hidden">
-                <CharacterView chatId={activeChatId} slashCommands={slashCommands} />
+            {/* Character panel — mounted once then kept (hidden) so it never
+                re-initializes / reloads the VRM when switching tabs */}
+            {charOpened && (
+              <div className={cn('flex-1 overflow-hidden', tab === 'character' ? 'block' : 'hidden')}>
+                <CharacterView chatId={activeChatId} slashCommands={slashCommands} active={tab === 'character'} />
               </div>
             )}
 

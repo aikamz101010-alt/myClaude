@@ -6,7 +6,7 @@ import { Volume2, VolumeX, X, Loader2, Bot } from 'lucide-react'
 import { useSessionStore } from '@/store/sessionStore'
 import { useAvatarStore } from '@/store/avatarStore'
 import { lipSync } from '@/lib/lipsync'
-import { speak, stopSpeaking } from '@/lib/speak'
+import { speakMessageOnce, stopSpeaking } from '@/lib/speak'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -169,7 +169,6 @@ function useAutoSpeak(chatId: string | null) {
   const status = useSessionStore(s => (chatId ? s.chats[chatId]?.status : undefined))
   const messages = useSessionStore(s => (chatId ? s.chats[chatId]?.messages : undefined))
   const autoSpeak = useAvatarStore(s => s.autoSpeak)
-  const lastSpoken = useRef<string | null>(null)
 
   useEffect(() => {
     if (!autoSpeak || status !== 'idle' || !messages?.length) return
@@ -182,10 +181,8 @@ function useAutoSpeak(chatId: string | null) {
         .join(' ')
         .trim() || m.content
       if (!text) return
-      if (m.id !== lastSpoken.current) {
-        lastSpoken.current = m.id
-        speak(text)
-      }
+      // Global dedup → shared with the Character panel; speaks each reply once.
+      speakMessageOnce(m.id, text)
       return
     }
   }, [status, messages, autoSpeak])

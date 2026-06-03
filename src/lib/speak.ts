@@ -29,10 +29,12 @@ export function sanitizeForSpeech(text: string, maxLen = 600): string {
   return t
 }
 
-// Per user preference: ALWAYS use a female Indonesian voice — locked here so no
-// setting (now or later) can switch the avatar to a male voice.
-const FEMALE_EDGE_VOICE = 'id-ID-GadisNeural' // Edge neural, female
-const FEMALE_LOCAL_VOICE = 'Damayanti'        // macOS `say` id_ID, female
+// Per user preference: ALWAYS use a female voice — locked here so no setting
+// (now or later) can switch the avatar to a male voice. Both Edge options below
+// are female.
+const FEMALE_EDGE_ID = 'id-ID-GadisNeural'              // native Indonesian (best for pure ID)
+const FEMALE_EDGE_MULTI = 'en-US-AvaMultilingualNeural' // auto language per word (mixed ID/EN)
+const FEMALE_LOCAL_VOICE = 'Damayanti'                  // macOS `say` id_ID, female
 
 /** macOS `say` (offline) synthesis → base64 WAV. */
 function synthLocal(text: string): Promise<string> {
@@ -42,7 +44,11 @@ function synthLocal(text: string): Promise<string> {
 
 /** Microsoft Edge neural synthesis (free, realistic, needs internet) → base64 MP3. */
 function synthEdge(text: string): Promise<string> {
-  return invoke<string>('synthesize_edge', { text, voice: FEMALE_EDGE_VOICE, rate: null })
+  const { edgeMultilingual } = useAvatarStore.getState()
+  // Multilingual voice adapts pronunciation per word (ID stays ID, English
+  // stays English); native voice is best when the text is purely Indonesian.
+  const voice = edgeMultilingual ? FEMALE_EDGE_MULTI : FEMALE_EDGE_ID
+  return invoke<string>('synthesize_edge', { text, voice, rate: null })
 }
 
 /** Synthesize + play `text` through the avatar (lip-sync driven by the audio). */
@@ -72,4 +78,14 @@ export async function speak(text: string): Promise<void> {
 /** Stop any in-progress narration. */
 export function stopSpeaking(): void {
   lipSync.stop()
+}
+
+// Narrate a given assistant message at most once across the whole app, keyed by
+// its id. Prevents double narration (floating avatar + Character panel) and
+// re-narration when a view remounts / the user switches tabs.
+let lastSpokenId: string | null = null
+export function speakMessageOnce(id: string, text: string): void {
+  if (id === lastSpokenId) return
+  lastSpokenId = id
+  void speak(text)
 }
