@@ -29,26 +29,31 @@ export function sanitizeForSpeech(text: string, maxLen = 600): string {
   return t
 }
 
-// Per user preference: ALWAYS use a female voice — locked here so no setting
-// (now or later) can switch the avatar to a male voice. Both Edge options below
-// are female.
-const FEMALE_EDGE_ID = 'id-ID-GadisNeural'              // native Indonesian (best for pure ID)
-const FEMALE_EDGE_MULTI = 'en-US-AvaMultilingualNeural' // auto language per word (mixed ID/EN)
-const FEMALE_LOCAL_VOICE = 'Damayanti'                  // macOS `say` id_ID, female
+// Per user preference: ALWAYS use a female voice — every option below is female,
+// so no language choice can switch the avatar to a male voice.
+// Edge (neural) voices, keyed by spoken-language setting:
+const EDGE_VOICE: Record<'id' | 'en' | 'multi', string> = {
+  id: 'id-ID-GadisNeural',              // native Indonesian
+  en: 'en-US-AriaNeural',               // native English
+  multi: 'en-US-AvaMultilingualNeural', // auto per-word (mixed ID/EN)
+}
+// macOS `say` (offline) voices, keyed by language ('multi' falls back to ID):
+const LOCAL_VOICE: Record<'id' | 'en' | 'multi', string> = {
+  id: 'Damayanti',  // id_ID, female
+  en: 'Samantha',   // en_US, female
+  multi: 'Damayanti',
+}
 
 /** macOS `say` (offline) synthesis → base64 WAV. */
 function synthLocal(text: string): Promise<string> {
-  const { rate } = useAvatarStore.getState()
-  return invoke<string>('synthesize_speech', { text, voice: FEMALE_LOCAL_VOICE, rate: rate || null })
+  const { rate, voiceLang } = useAvatarStore.getState()
+  return invoke<string>('synthesize_speech', { text, voice: LOCAL_VOICE[voiceLang], rate: rate || null })
 }
 
 /** Microsoft Edge neural synthesis (free, realistic, needs internet) → base64 MP3. */
 function synthEdge(text: string): Promise<string> {
-  const { edgeMultilingual } = useAvatarStore.getState()
-  // Multilingual voice adapts pronunciation per word (ID stays ID, English
-  // stays English); native voice is best when the text is purely Indonesian.
-  const voice = edgeMultilingual ? FEMALE_EDGE_MULTI : FEMALE_EDGE_ID
-  return invoke<string>('synthesize_edge', { text, voice, rate: null })
+  const { voiceLang } = useAvatarStore.getState()
+  return invoke<string>('synthesize_edge', { text, voice: EDGE_VOICE[voiceLang], rate: null })
 }
 
 /** Synthesize + play `text` through the avatar (lip-sync driven by the audio). */

@@ -29,11 +29,12 @@ const ZOOMS: { key: Zoom; label: string }[] = [
 
 // ── Vanilla three.js VRM stage with walking, gestures & zoom framing ──────────
 
-function VrmStage({ url, zoom, thinkingRef, activeRef, onStatus }: {
+function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus }: {
   url: string
   zoom: Zoom
   thinkingRef: MutableRefObject<boolean>
   activeRef: MutableRefObject<boolean>
+  interactiveRef: MutableRefObject<boolean>
   onStatus: (s: Status) => void
 }) {
   const mountRef = useRef<HTMLDivElement>(null)
@@ -119,6 +120,10 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, onStatus }: {
     let legPhase = 0
     let faceAngle = 0        // smoothed Y rotation
     let idleDwell = 0        // seconds spent continuously idle (gates walking)
+    // Eye saccades (gaze darts to a new spot, then holds).
+    let gazeX = 0, gazeY = 0, gazeTX = 0, gazeTY = 0, nextSaccadeAt = 0
+    // Occasional idle hand gesture.
+    let idleGestureUntil = 0, nextIdleGestureAt = 4, idleGestureSide: 'l' | 'r' = 'r'
 
     const lerpRot = (
       b: THREE.Object3D | null | undefined,
@@ -182,19 +187,47 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, onStatus }: {
         if (lLL) lLL.rotation.x = Math.max(0, -Math.sin(legPhase)) * 0.7 * walkAmp
         if (rLL) rLL.rotation.x = Math.max(0, -Math.sin(legPhase + Math.PI)) * 0.7 * walkAmp
 
-        // ── Expressions: blink + mouth + smile + thinking gaze ──
+        // ── Expressions: blink (with occasional double-blink) + mouth + smile ──
         const phase = time % 4
-        const blink = phase > 3.8 ? Math.sin(((phase - 3.8) / 0.2) * Math.PI) : 0
+        let blink = phase > 3.8 ? Math.sin(((phase - 3.8) / 0.2) * Math.PI) : 0
+        const phase2 = (time + 2.05) % 6.5      // a second, rarer blink beat → double-blinks
+        if (phase2 > 6.4) blink = Math.max(blink, Math.sin(((phase2 - 6.4) / 0.1) * Math.PI))
         em?.setValue(VRMExpressionPresetName.Blink, blink)
         em?.setValue(VRMExpressionPresetName.Aa, thinking ? 0 : lipSync.mouth())
         em?.setValue(VRMExpressionPresetName.Happy, speaking ? 0.3 : thinking ? 0.05 : 0.12)
+
+        // ── Eyes: lively gaze. Thinking → steady up-aside ponder; otherwise the
+        // eyes dart to a new target every 1-3s (saccade) then hold. ──
+        const interactive = interactiveRef.current
+        if (thinking) {
+          gazeTX = -0.3; gazeTY = -0.35
+        } else if (interactive && time > nextSaccadeAt) {
+          gazeTX = (Math.random() * 2 - 1) * 0.6
+          gazeTY = (Math.random() * 2 - 1) * 0.4
+          nextSaccadeAt = time + 1.0 + Math.random() * 2.2
+        } else if (!interactive) {
+          gazeTX = 0; gazeTY = 0
+        }
+        gazeX += (gazeTX - gazeX) * 0.28   // fast saccade, then holds
+        gazeY += (gazeTY - gazeY) * 0.28
         if (em) {
-          const look = thinking ? 1 : 0
           try {
-            em.setValue(VRMExpressionPresetName.LookUp, 0.35 * look)
-            em.setValue(VRMExpressionPresetName.LookLeft, 0.30 * look)
+            em.setValue(VRMExpressionPresetName.LookLeft, Math.max(0, -gazeX))
+            em.setValue(VRMExpressionPresetName.LookRight, Math.max(0, gazeX))
+            em.setValue(VRMExpressionPresetName.LookUp, Math.max(0, -gazeY))
+            em.setValue(VRMExpressionPresetName.LookDown, Math.max(0, gazeY))
           } catch { /* some models lack look-direction expressions */ }
         }
+
+        // ── Occasional idle hand gesture (liveliness) ──
+        if (interactive && !thinking && !speaking && !moving && time > nextIdleGestureAt) {
+          idleGestureUntil = time + 1.6
+          nextIdleGestureAt = time + 5 + Math.random() * 6
+          idleGestureSide = Math.random() < 0.5 ? 'l' : 'r'
+        }
+        const idleG = time < idleGestureUntil
+          ? Math.sin(((idleGestureUntil - time) / 1.6) * Math.PI)   // 0 → 1 → 0
+          : 0
 
         // ── Arm pose targets (lerped → smooth transitions between modes) ──
         const gesture = speaking ? 1 : 0
@@ -205,6 +238,9 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, onStatus }: {
         let rUAx = Math.sin(time * 0.7 + 0.5) * 0.05 + gesture * Math.sin(time * 3.2 + 1) * 0.18 + armSwing
         let lLAz = -0.20 - gesture * Math.abs(Math.sin(time * 3.0)) * 0.28
         let rLAz = 0.20 + gesture * Math.abs(Math.sin(time * 3.2 + 1)) * 0.28
+        // Idle gesture raises one hand briefly.
+        if (idleGestureSide === 'r') { rUAx -= idleG * 0.5; rLAz += idleG * 0.5 }
+        else { lUAx -= idleG * 0.5; lLAz -= idleG * 0.5 }
         if (thinking) {
           // Pondering: right hand up toward the chin, left arm relaxed down.
           rUAz = 0.95
@@ -215,6 +251,12 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, onStatus }: {
         lerpRot(lUA, 'z', lUAz); lerpRot(lUA, 'x', lUAx)
         lerpRot(rUA, 'z', rUAz); lerpRot(rUA, 'x', rUAx)
         lerpRot(lLA, 'z', lLAz); lerpRot(rLA, 'z', rLAz)
+
+        // Subtle hand/wrist motion so the hands are never frozen.
+        const hw = interactive ? 1 : 0
+        const lHand = bone('leftHand'); const rHand = bone('rightHand')
+        if (lHand) lHand.rotation.z = Math.sin(time * 1.7) * 0.06 * hw - (idleGestureSide === 'l' ? idleG * 0.2 : 0)
+        if (rHand) rHand.rotation.z = Math.sin(time * 1.9 + 1) * 0.06 * hw + (idleGestureSide === 'r' ? idleG * 0.2 : 0)
 
         // ── Body: weight shift + breathing ──
         const hips = bone('hips'); const spine = bone('spine')
@@ -373,11 +415,16 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
   const vrmUrl = useAvatarStore(s => s.vrmUrl)
   const autoSpeak = useAvatarStore(s => s.autoSpeak)
   const setAutoSpeak = useAvatarStore(s => s.setAutoSpeak)
+  // Persisted Character-panel view settings.
+  const zoom = useAvatarStore(s => s.zoom)
+  const setZoom = useAvatarStore(s => s.setZoom)
+  const side = useAvatarStore(s => s.subtitleSide)
+  const setSide = useAvatarStore(s => s.setSubtitleSide)
+  const showLog = useAvatarStore(s => s.showLog)
+  const setShowLog = useAvatarStore(s => s.setShowLog)
+  const interactive = useAvatarStore(s => s.interactive)
   const [status, setStatus] = useState<Status>('loading')
-  const [zoom, setZoom] = useState<Zoom>('full')
-  const [side, setSide] = useState<'left' | 'right'>('left')
   const [showSettings, setShowSettings] = useState(false)
-  const [showLog, setShowLog] = useState(true)
 
   // Chat wiring (same input as the Chat tab → type + speech-to-text + send)
   const { chats, sendMessageStream, interruptChat, setChatModel, setChatPermissionMode, setChatYolo } = useSessionStore()
@@ -389,6 +436,8 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
   thinkingRef.current = !!streaming   // waiting for / receiving a reply → thinking pose, no walking
   const activeRef = useRef(active)
   activeRef.current = active
+  const interactiveRef = useRef(interactive)
+  interactiveRef.current = interactive
 
   useAutoSpeak(chatId, active)
 
@@ -409,7 +458,7 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
         {/* Stage area */}
         <div className="relative flex-1 overflow-hidden bg-gradient-to-b from-surface2/30 via-bg to-bg">
           {/* 3D stage */}
-          <VrmStage url={vrmUrl} zoom={zoom} thinkingRef={thinkingRef} activeRef={activeRef} onStatus={setStatus} />
+          <VrmStage url={vrmUrl} zoom={zoom} thinkingRef={thinkingRef} activeRef={activeRef} interactiveRef={interactiveRef} onStatus={setStatus} />
 
           {/* Synced subtitle box (left / right of the character) */}
           <Subtitle side={side} />
@@ -437,13 +486,13 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
 
           {/* Top-right: transcript toggle + subtitle side + mute + settings */}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-1">
-            <button onClick={() => setShowLog(v => !v)}
+            <button onClick={() => setShowLog(!showLog)}
               title={showLog ? 'Sembunyikan log percakapan' : 'Tampilkan log percakapan'}
               className={cn('p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 cursor-pointer transition-colors',
                 showLog ? 'text-accent' : 'text-muted hover:text-text')}>
               <ScrollText className="w-4 h-4" />
             </button>
-            <button onClick={() => setSide(s => (s === 'left' ? 'right' : 'left'))}
+            <button onClick={() => setSide(side === 'left' ? 'right' : 'left')}
               title={`Subtitle di ${side === 'left' ? 'kiri' : 'kanan'} — klik untuk pindah`}
               className="p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 text-muted hover:text-text cursor-pointer transition-colors">
               {side === 'left' ? <PanelLeft className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}
