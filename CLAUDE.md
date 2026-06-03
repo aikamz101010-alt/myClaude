@@ -28,6 +28,20 @@ Desktop GUI for the **Claude Code CLI**, built with **Tauri 2 (Rust) + React + T
 - **Permissions**: per-tool popups (Allow/Deny/Always) via `canUseTool`; YOLO mode = `bypassPermissions`.
 - **CONTRACT.md** sections: `# Allowed Skills`, `# Active Agents`, `# Plugins`, `# Lead Orchestrator`, `# Documents` (PRD/TRD auto-maintain), `# Custom Rules`.
 
+## Virtual Assistant (avatar + voice + mic + live-assistant)
+
+A 3D VRM avatar ("Character" tab, renamed to the assistant's name) that narrates replies, lip-syncs, gestures, and can be driven by a separate-session subagent.
+
+- **Components**: `components/project/CharacterView.tsx` (3D stage via vanilla three.js + `@pixiv/three-vrm`, standby poses, gestures, dynamic motions, double-click look, hover-follow, transcript with You/Claude/Sari icons, prompt box, thinking indicator, permission-confirm panel), `Avatar3DView.tsx` (floating mini avatar), `LiveBadge.tsx` (Live status: name·model·tokens·last-run), `settings/AvatarVoiceSettings.tsx` (Character ⚙️), `settings/VirtualAssistantSettings.tsx` (Hub Settings: name*+persona* required, VRM upload, voice gender, model, full-motion, delete).
+- **Stores**: `avatarStore` (assistantName, persona, voiceGender, provider, voiceLang, liveAssistant, liveModel, fullMotion, vrmUrl, …), `liveStatusStore` (running/tokens/lastRun), `learnedMotionsStore` (saved motions).
+- **VRM**: default `public/avatar/character.vrm`; custom upload loaded via `convertFileSrc` (needs `assetProtocol` + `protocol-asset` feature in tauri.conf/Cargo).
+- **TTS**: `lib/speak.ts` — **Edge neural** (free, `msedge-tts`, no key) default with **macOS `say`** offline fallback (`commands/avatar.rs`). Voice by gender (woman/man) × language (`voiceLang`: id/en/multi). Lip-sync (`lib/lipsync.ts`) drives the `Aa` viseme from audio RMS; mouth follows `lipSync.speaking` (works during Claude streaming too); emotion blendshape lowered while talking so the viseme stays visible.
+- **Mic / dictation**: `commands/dictation.rs` — offline cross-platform STT (`cpal` capture + `whisper-rs`/whisper.cpp); model downloaded on first use. Mic permission via `src-tauri/Info.plist` (`NSMicrophoneUsageDescription`).
+- **Motions**: `lib/standbyPoses.ts` — static poses + dynamic `MOTIONS` (dance, wave, raise-hand, …). The live-assistant can also COMPOSE parametric motions (bone/axis/base/amp/freq/phase) and SAVE them (persisted in `learnedMotionsStore`).
+- **Live Assistant (Sari)**: `lib/liveAssistant.ts` — a SEPARATE Claude session (Haiku/Sonnet/Opus via `liveModel`, `sessionId:null`) on a `__director__-N` channel, never the working chat. `runDirector` reacts to Claude's replies (emotion+gesture); `commandAvatar` handles avatar-tab input → perform (gesture/motion + spoken reply) or **forward** coding tasks to the main agent. Auto-generates `~/.claude/agents/live-virtual-assistant.md` (source of truth, regenerated on Hub Save). In the Character tab: READ tools auto-approved, write/exec tools surface a **confirmation panel** + tab dot + badge + Sari voice notice.
+- **Native deps** (release build): `whisper-rs` (needs cmake + C++/libclang), `cpal`, `msedge-tts`, `rustls(ring)`, `base64`. macOS CI has these; **Windows** build is the risk (libclang/cmake for whisper-rs-sys). Linux is excluded from the release matrix.
+- **Local note**: this dev Mac's Command Line Tools is missing toolchain libc++ headers → `~/.cargo/config.toml` injects `-isysroot`/`-isystem` so whisper.cpp builds. CI runners don't need this.
+
 ## Conventions
 
 - Run `npx tsc --noEmit` (frontend) and `cargo check` (in `src-tauri/`) before considering work done — both must be clean.

@@ -65,6 +65,104 @@ export const SPEAK_GESTURES: StandbyPose[] = [
   { name: 'count-front', lUAz: -1.10, lUAx: -0.62, rUAz: 1.10, rUAx: -0.62, lLAz: -1.05, rLAz: 1.05 },
 ]
 
+// ── Dynamic motions ─────────────────────────────────────────────────────────
+// Unlike the static poses above, these are TIME-BASED animations the live
+// assistant can trigger (e.g. "joget"/dance). Each sets bone rotations directly
+// every frame for the duration of the cue, giving lively full-body movement.
+type MBone = { rotation: { x: number; y: number; z: number }; position: { x: number; y: number; z: number } } | null | undefined
+type Motion = (t: number, bone: (n: string) => MBone) => void
+
+const set = (b: MBone, axis: 'x' | 'y' | 'z', v: number) => { if (b) b.rotation[axis] = v }
+
+export const MOTIONS: Record<string, Motion> = {
+  // Upbeat dance — hips sway, arms up bouncing, head bob, knee bounce.
+  dance: (t, b) => {
+    const beat = t * 7
+    set(b('hips'), 'z', Math.sin(beat) * 0.14); set(b('hips'), 'y', Math.sin(beat / 2) * 0.12)
+    set(b('spine'), 'z', -Math.sin(beat) * 0.08)
+    set(b('leftUpperArm'), 'z', -0.5 + Math.sin(beat) * 0.25); set(b('leftUpperArm'), 'x', -0.9 + Math.sin(beat * 2) * 0.4)
+    set(b('rightUpperArm'), 'z', 0.5 - Math.sin(beat) * 0.25); set(b('rightUpperArm'), 'x', -0.9 - Math.sin(beat * 2) * 0.4)
+    set(b('leftLowerArm'), 'z', -1.3); set(b('rightLowerArm'), 'z', 1.3)
+    set(b('head'), 'z', Math.sin(beat) * 0.12); set(b('head'), 'x', Math.sin(beat * 2) * 0.05)
+    set(b('leftUpperLeg'), 'x', Math.max(0, Math.sin(beat)) * 0.3)
+    set(b('rightUpperLeg'), 'x', Math.max(0, -Math.sin(beat)) * 0.3)
+  },
+  // Cheer — both arms up, fists pumping.
+  cheer: (t, b) => {
+    const p = Math.abs(Math.sin(t * 5))
+    set(b('leftUpperArm'), 'z', -0.3); set(b('leftUpperArm'), 'x', -2.4 + p * 0.4)
+    set(b('rightUpperArm'), 'z', 0.3); set(b('rightUpperArm'), 'x', -2.4 + p * 0.4)
+    set(b('leftLowerArm'), 'z', -1.6); set(b('rightLowerArm'), 'z', 1.6)
+    set(b('head'), 'x', -0.1)
+  },
+  // Clap — forearms meet in front repeatedly.
+  clap: (t, b) => {
+    const c = (Math.sin(t * 9) + 1) / 2
+    set(b('leftUpperArm'), 'z', -1.0); set(b('leftUpperArm'), 'x', -0.7)
+    set(b('rightUpperArm'), 'z', 1.0); set(b('rightUpperArm'), 'x', -0.7)
+    set(b('leftLowerArm'), 'z', -1.3 - c * 0.4); set(b('rightLowerArm'), 'z', 1.3 + c * 0.4)
+  },
+  // Bow — gentle repeated bow from the waist.
+  bow: (t, b) => {
+    const d = (Math.sin(t * 1.5) * 0.5 + 0.5) * 0.5
+    set(b('spine'), 'x', d); set(b('chest'), 'x', d * 0.4); set(b('head'), 'x', d * 0.5)
+    set(b('leftUpperArm'), 'z', -1.45); set(b('rightUpperArm'), 'z', 1.45)
+  },
+  // Nod — yes.
+  nod: (t, b) => { set(b('head'), 'x', 0.18 + Math.sin(t * 5) * 0.18) },
+  // Shake — no.
+  shake: (t, b) => { set(b('head'), 'y', Math.sin(t * 5) * 0.3) },
+  // Raise hand straight up (acung tangan).
+  'raise-hand': (_t, b) => {
+    set(b('rightUpperArm'), 'z', 0.2); set(b('rightUpperArm'), 'x', -2.7); set(b('rightLowerArm'), 'z', 0.3)
+    set(b('leftUpperArm'), 'z', -1.4); set(b('leftLowerArm'), 'z', -0.15)
+  },
+  // Wave a raised right hand.
+  wave: (t, b) => {
+    set(b('rightUpperArm'), 'z', 0.3); set(b('rightUpperArm'), 'x', -2.5)
+    set(b('rightLowerArm'), 'z', 0.6 + Math.sin(t * 9) * 0.45)
+    set(b('leftUpperArm'), 'z', -1.4)
+    set(b('head'), 'z', Math.sin(t * 3) * 0.05)
+  },
+  // Point up (raised index / making a point).
+  'point-up': (_t, b) => {
+    set(b('rightUpperArm'), 'z', 0.4); set(b('rightUpperArm'), 'x', -2.6); set(b('rightLowerArm'), 'z', 0.1)
+    set(b('leftUpperArm'), 'z', -1.35)
+  },
+  // Peace / hi near the head.
+  peace: (t, b) => {
+    set(b('rightUpperArm'), 'z', 0.5); set(b('rightUpperArm'), 'x', -2.0); set(b('rightLowerArm'), 'z', 1.4)
+    set(b('leftUpperArm'), 'z', -1.4)
+    set(b('head'), 'z', 0.08 + Math.sin(t * 3) * 0.04)
+  },
+  // Love — both hands up, forearms meeting overhead (heart-ish).
+  love: (_t, b) => {
+    set(b('leftUpperArm'), 'z', -0.5); set(b('leftUpperArm'), 'x', -2.3); set(b('leftLowerArm'), 'z', -2.0)
+    set(b('rightUpperArm'), 'z', 0.5); set(b('rightUpperArm'), 'x', -2.3); set(b('rightLowerArm'), 'z', 2.0)
+    set(b('head'), 'x', -0.1)
+  },
+  // Thinking — hand to chin.
+  think: (t, b) => {
+    set(b('rightUpperArm'), 'z', 0.95); set(b('rightUpperArm'), 'x', -0.35); set(b('rightLowerArm'), 'z', 1.45)
+    set(b('leftUpperArm'), 'z', -1.3); set(b('leftLowerArm'), 'z', -0.3)
+    set(b('head'), 'x', -0.1 + Math.sin(t * 0.8) * 0.02); set(b('head'), 'y', 0.1)
+  },
+  // Sad slump.
+  slump: (_t, b) => {
+    set(b('spine'), 'x', 0.2); set(b('head'), 'x', 0.25)
+    set(b('leftUpperArm'), 'z', -1.45); set(b('rightUpperArm'), 'z', 1.45)
+  },
+  // Shy — both hands up near face.
+  shy: (t, b) => {
+    set(b('leftUpperArm'), 'z', -0.7); set(b('leftUpperArm'), 'x', -1.7); set(b('leftLowerArm'), 'z', -1.8)
+    set(b('rightUpperArm'), 'z', 0.7); set(b('rightUpperArm'), 'x', -1.7); set(b('rightLowerArm'), 'z', 1.8)
+    set(b('head'), 'x', 0.08); set(b('head'), 'z', Math.sin(t * 2) * 0.04)
+  },
+}
+
+export const MOTION_NAMES = Object.keys(MOTIONS)
+export const isMotion = (name: string): boolean => name in MOTIONS
+
 /** Pick a random speaking-gesture index different from `current`. */
 export function nextSpeakGesture(current: number): number {
   if (SPEAK_GESTURES.length <= 1) return 0

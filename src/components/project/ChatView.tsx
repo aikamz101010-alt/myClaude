@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useSessionStore, type Message, type Block } from '@/store/sessionStore'
+import { useAvatarStore } from '@/store/avatarStore'
+import { LiveBadge } from './LiveBadge'
 import { ChatInput, type AttachedFile } from './ChatInput'
 import { cn } from '@/lib/utils'
 import {
@@ -235,6 +237,8 @@ export function ChatView({ chatId, slashCommands }: Props) {
   const [permMsg, setPermMsg] = useState('')  // custom instruction for the permission popup
   const bottomRef = useRef<HTMLDivElement>(null)
 
+  const liveAssistant = useAvatarStore(s => s.liveAssistant)
+
   const messages  = chat?.messages ?? []
   const streaming = chat?.status === 'streaming'
   const sessionId = chat?.sessionId ?? null
@@ -288,6 +292,7 @@ export function ChatView({ chatId, slashCommands }: Props) {
               · ↑{fmtTokens(totalIn)} ↓{fmtTokens(totalOut)} tok
             </span>
           )}
+          {liveAssistant && <span className="flex-shrink-0"><LiveBadge /></span>}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           <button onClick={handleSync} disabled={syncing || streaming}

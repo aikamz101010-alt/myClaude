@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { VRM, VRMLoaderPlugin, VRMUtils, VRMExpressionPresetName } from '@pixiv/three-vrm'
-import { Volume2, VolumeX, Loader2, Bot, Settings, X } from 'lucide-react'
+import { Volume2, VolumeX, Loader2, Bot, Settings, X, User, Sparkles, ShieldAlert } from 'lucide-react'
 import { useSessionStore, type Message } from '@/store/sessionStore'
 import { useAvatarStore } from '@/store/avatarStore'
 import { lipSync } from '@/lib/lipsync'
@@ -10,11 +10,18 @@ import { enqueueSpeech, resetNarration, markNarrated, stopSpeaking, sanitizeForS
 import { cn } from '@/lib/utils'
 import { ChatInput, type AttachedFile } from './ChatInput'
 import { AvatarVoiceSettings } from '@/components/settings/AvatarVoiceSettings'
-import { STANDBY_POSES, nextStandbyPose, SPEAK_GESTURES, nextSpeakGesture, type StandbyPose } from '@/lib/standbyPoses'
-import { runDirector, commandAvatar, type Emotion } from '@/lib/liveAssistant'
+import { LiveBadge } from './LiveBadge'
+import { useLearnedMotions } from '@/store/learnedMotionsStore'
+import { STANDBY_POSES, nextStandbyPose, SPEAK_GESTURES, nextSpeakGesture, MOTIONS, type StandbyPose } from '@/lib/standbyPoses'
+import { runDirector, commandAvatar, type Emotion, type MotionChannel } from '@/lib/liveAssistant'
 
 // A live-assistant performance cue applied for a short window.
-interface ActiveCue { emotion: Emotion; gesture: string; until: number }
+interface ActiveCue { emotion: Emotion; gesture: string; until: number; motion?: MotionChannel[] }
+
+// Read-only tools the avatar tab auto-approves (no popup here). Anything else
+// (Write/Edit/Bash/…) requires explicit confirmation.
+const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebFetch', 'WebSearch', 'list_directory', 'read_file', 'get_library', 'get_session_history'])
+const isReadTool = (name: string): boolean => READ_TOOLS.has(name)
 
 // Look up a gesture/pose by name (for live-assistant gesture cues).
 const POSE_BY_NAME = new Map<string, StandbyPose>(
@@ -238,12 +245,18 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, cueRef, o
         const phase2 = (time + 2.05) % 6.5      // a second, rarer blink beat → double-blinks
         if (phase2 > 6.4) blink = Math.max(blink, Math.sin(((phase2 - 6.4) / 0.1) * Math.PI))
         em?.setValue(VRMExpressionPresetName.Blink, blink)
-        em?.setValue(VRMExpressionPresetName.Aa, thinking ? 0 : lipSync.mouth())
+        // Mouth follows the ACTUAL audio (lipSync.speaking) — not `thinking`, so
+        // lip-sync also works while narrating Claude's reply during streaming.
+        const talking = lipSync.speaking
+        em?.setValue(VRMExpressionPresetName.Aa, talking ? lipSync.mouth() : 0)
         // Emotion: a live-assistant cue overrides the default subtle smile.
         const cueNow = cueRef.current
         const cueActive = !!cueNow && Date.now() < cueNow.until
         const emo: Emotion = cueActive ? cueNow!.emotion : 'happy'
-        const emoLevel = cueActive ? 0.7 : speaking ? 0.3 : thinking ? 0.05 : 0.12
+        // While the mouth is actually moving, keep the emotion blendshape LOW so
+        // it doesn't mask the viseme (a high 'happy'/'sad' shapes the mouth and
+        // makes lip-sync look frozen). Full emotion resumes once the mouth stops.
+        const emoLevel = talking ? 0.15 : cueActive ? 0.7 : thinking ? 0.05 : 0.12
         for (const k of EMOTION_KEYS) {
           const preset = EMO_PRESET[k]
           if (preset) { try { em?.setValue(preset, emo === k ? emoLevel : 0) } catch { /* missing expr */ } }
@@ -385,6 +398,18 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, cueRef, o
           head.rotation.z += (hz - head.rotation.z) * 0.2
         }
 
+        // Live-assistant dynamic motion (dance, cheer, …) — full-body override.
+        if (cueActive && cueNow?.gesture && MOTIONS[cueNow.gesture]) {
+          MOTIONS[cueNow.gesture](time, bone as unknown as (n: string) => { rotation: { x: number; y: number; z: number }; position: { x: number; y: number; z: number } } | null | undefined)
+        }
+        // Agent-composed custom motion (parametric channels) — Sari invents the move.
+        if (cueActive && cueNow?.motion) {
+          for (const ch of cueNow.motion) {
+            const node = bone(ch.bone as never)
+            if (node) node.rotation[ch.axis] = (ch.base ?? 0) + Math.sin(time * (ch.freq ?? 0) + (ch.phase ?? 0)) * (ch.amp ?? 0)
+          }
+        }
+
         vrm.update(delta)
       }
       renderer.render(scene, camera)
@@ -524,36 +549,82 @@ function useStreamNarration(chatId: string | null, active: boolean) {
 
 // ── Transcript: the conversation log, streams the reply live ───────────────────
 
-function Transcript({ chatId }: { chatId: string | null }) {
+type AvatarLogEntry = { id: string; role: 'user' | 'sari'; text: string; ts: number }
+type LogWho = 'you' | 'claude' | 'sari'
+
+const ThinkingDots = () => (
+  <span className="inline-flex gap-0.5 align-middle">
+    {[0, 150, 300].map(d => (
+      <span key={d} className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: `${d}ms` }} />
+    ))}
+  </span>
+)
+
+function Transcript({ chatId, avatarLog, sariThinking, claudeThinking, assistantName }: {
+  chatId: string | null
+  avatarLog: AvatarLogEntry[]
+  sariThinking: boolean
+  claudeThinking: boolean
+  assistantName: string
+}) {
   const messages = useSessionStore(s => (chatId ? s.chats[chatId]?.messages : undefined)) ?? []
   const ref = useRef<HTMLDivElement>(null)
+
+  // Merge the main-chat (Claude) messages and the avatar (Sari) log by time.
+  const entries: { id: string; who: LogWho; text: string; ts: number }[] = [
+    // Only Claude's replies come from the main chat; user prompts come from the
+    // avatar log (added immediately on submit) so they appear without duplication.
+    ...messages.filter(m => m.role === 'assistant').map(m => {
+      const text = (m.blocks ?? [])
+        .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+        .map(b => b.text).join(' ').trim() || m.content
+      return { id: m.id, who: 'claude' as LogWho, text, ts: m.timestamp }
+    }),
+    ...avatarLog.map(e => ({ id: e.id, who: (e.role === 'user' ? 'you' : 'sari') as LogWho, text: e.text, ts: e.ts })),
+  ].filter(e => e.text).sort((a, b) => a.ts - b.ts)
 
   useEffect(() => {
     const el = ref.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages])
+  }, [entries.length, sariThinking, claudeThinking])
+
+  const meta: Record<LogWho, { label: string; Icon: typeof User; cls: string; align: string }> = {
+    you:    { label: 'You',                 Icon: User,      cls: 'bg-accent/10',  align: 'ml-5' },
+    claude: { label: 'Claude',              Icon: Bot,       cls: 'bg-surface2/50', align: 'mr-5' },
+    sari:   { label: assistantName || 'Assistant', Icon: Sparkles, cls: 'bg-accent/[0.07] border border-accent/20', align: 'mr-5' },
+  }
 
   return (
     <div ref={ref} className="w-[300px] flex-shrink-0 border-l border-white/5 bg-bg/40 overflow-y-auto p-3 space-y-2">
-      {messages.length === 0 && (
+      {entries.length === 0 && !sariThinking && !claudeThinking && (
         <p className="text-xs font-mono text-muted/60">Belum ada percakapan.</p>
       )}
-      {messages.map(m => {
-        const text = (m.blocks ?? [])
-          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-          .map(b => b.text)
-          .join(' ')
-          .trim() || m.content
-        if (!text) return null
-        const user = m.role === 'user'
+      {entries.map(e => {
+        const { label, Icon, cls, align } = meta[e.who]
         return (
-          <div key={m.id} className={cn('rounded-xl px-2.5 py-1.5 text-xs leading-relaxed',
-            user ? 'bg-accent/10 text-text ml-5' : 'bg-surface2/50 text-text mr-5')}>
-            <span className="block text-[10px] font-mono text-muted/60 mb-0.5">{user ? 'You' : 'Claude'}</span>
-            <span className="whitespace-pre-wrap break-words">{text}</span>
+          <div key={e.id} className={cn('rounded-xl px-2.5 py-1.5 text-xs leading-relaxed text-text', cls, align)}>
+            <span className="flex items-center gap-1 text-[10px] font-mono text-muted/60 mb-0.5">
+              <Icon className={cn('w-2.5 h-2.5', e.who === 'sari' && 'text-accent')} /> {label}
+            </span>
+            <span className="whitespace-pre-wrap break-words">{e.text}</span>
           </div>
         )
       })}
+      {/* Thinking indicators */}
+      {sariThinking && (
+        <div className="rounded-xl px-2.5 py-1.5 text-xs bg-accent/[0.07] border border-accent/20 text-accent mr-5">
+          <span className="flex items-center gap-1 text-[10px] font-mono mb-0.5">
+            <Sparkles className="w-2.5 h-2.5" /> {assistantName || 'Assistant'}
+          </span>
+          <ThinkingDots />
+        </div>
+      )}
+      {claudeThinking && (
+        <div className="rounded-xl px-2.5 py-1.5 text-xs bg-surface2/50 text-muted mr-5">
+          <span className="flex items-center gap-1 text-[10px] font-mono mb-0.5"><Bot className="w-2.5 h-2.5" /> Claude</span>
+          <ThinkingDots />
+        </div>
+      )}
     </div>
   )
 }
@@ -597,12 +668,18 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
   const showLog = useAvatarStore(s => s.showLog)
   const interactive = useAvatarStore(s => s.interactive)
   const liveAssistant = useAvatarStore(s => s.liveAssistant)
+  const assistantName = useAvatarStore(s => s.assistantName)
   const [status, setStatus] = useState<Status>('loading')
   const [showSettings, setShowSettings] = useState(false)
+  const [avatarLog, setAvatarLog] = useState<AvatarLogEntry[]>([])
+  const [sariThinking, setSariThinking] = useState(false)
+  const [promptBox, setPromptBox] = useState('')   // user's prompt, shown while it's being executed
 
   // Chat wiring (same input as the Chat tab → type + speech-to-text + send)
-  const { chats, sendMessageStream, interruptChat, setChatModel, setChatPermissionMode, setChatYolo } = useSessionStore()
+  const { chats, sendMessageStream, interruptChat, setChatModel, setChatPermissionMode, setChatYolo, respondPermission } = useSessionStore()
   const chat = chatId ? chats[chatId] : null
+  const pendingPermission = chat?.pendingPermission ?? null
+  const needsConfirm = !!pendingPermission && !isReadTool(pendingPermission.tool)
   const streaming = chat?.status === 'streaming'
 
   // Show the thinking pose IMMEDIATELY on submit (before the stream status flips),
@@ -622,6 +699,7 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
   const interactiveRef = useRef(interactive)
   interactiveRef.current = interactive
   const cueRef = useRef<ActiveCue | null>(null)
+  const lastMotionRef = useRef<MotionChannel[] | null>(null)  // last composed motion (for "save")
 
   useStreamNarration(chatId, active)
   useLiveAssistant(chatId, active, cueRef)
@@ -630,20 +708,71 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
   useEffect(() => { if (!active) resetNarration() }, [active])
   useEffect(() => () => stopSpeaking(), [])
 
+  // In the Character tab there is no native permission popup. Make sure prompts
+  // actually fire (not bypassed), then auto-approve READ-only tools and surface a
+  // confirmation for write/exec tools so commands never silently hang "thinking".
+  useEffect(() => {
+    if (active && chatId && chat?.permissionMode === 'bypassPermissions') setChatPermissionMode(chatId, 'default')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, chatId, chat?.permissionMode])
+
+  const notifiedPermRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!active || !chatId || !pendingPermission) return
+    if (isReadTool(pendingPermission.tool)) {
+      respondPermission(chatId, true)   // auto-approve read-only tools
+    } else if (notifiedPermRef.current !== pendingPermission.requestId) {
+      notifiedPermRef.current = pendingPermission.requestId
+      cueRef.current = { emotion: 'surprised', gesture: 'none', until: Date.now() + 8000 }
+      void speak(`Ada permintaan izin untuk ${pendingPermission.tool}. Mohon konfirmasi ya.`)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPermission, active, chatId])
+
   const handleSend = (text: string, files: AttachedFile[]) => {
     if (!chatId) return
     const fileRefs = files.map(f => `@${f.path}`).join(' ')
     const full = fileRefs ? `${fileRefs}\n${text}` : text
     const trimmed = text.trim()
+    if (trimmed) {
+      // Log the prompt IMMEDIATELY on submit (don't wait for a response).
+      const ts = Date.now()
+      setAvatarLog(l => [...l, { id: `u${ts}`, role: 'user', text: trimmed, ts }])
+      setPromptBox(trimmed)   // show the prompt box while executing
+    }
 
     // Live Assistant ON → the avatar decides: perform it herself (gesture +
     // spoken reply), or forward coding/work requests to the main Claude Code agent.
     if (liveAssistant && trimmed && files.length === 0) {
+      setSariThinking(true)
       void commandAvatar(trimmed, chat?.workingDir || '.').then(cmd => {
+        const say = (cmd.say ?? '').trim()
+        const log = (role: 'sari', text: string) => { const ts = Date.now(); setAvatarLog(l => [...l, { id: `s${ts}`, role, text, ts }]) }
+        if (cmd.action === 'save-motion') {
+          const last = lastMotionRef.current
+          if (last && last.length) {
+            const key = useLearnedMotions.getState().save(cmd.name || 'gerakan', last)
+            const msg = `Oke, gerakan disimpan sebagai "${key}".`
+            log('sari', msg); void speak(msg)
+          } else {
+            const msg = 'Belum ada gerakan terakhir untuk disimpan.'
+            log('sari', msg); void speak(msg)
+          }
+          setSariThinking(false)
+          return
+        }
         if (cmd.action === 'perform') {
-          cueRef.current = { emotion: cmd.emotion ?? 'happy', gesture: cmd.gesture ?? 'none', until: Date.now() + 9000 }
-          if (cmd.say) void speak(cmd.say)
+          // Reuse a saved motion if the chosen gesture is a learned one.
+          const learned = useLearnedMotions.getState().motions
+          const motion = cmd.motion ?? (cmd.gesture ? learned[cmd.gesture] : undefined)
+          cueRef.current = { emotion: cmd.emotion ?? 'happy', gesture: cmd.gesture ?? 'none', until: Date.now() + 9000, motion }
+          if (motion && motion.length) lastMotionRef.current = motion
+          if (cmd.saveAs && cmd.motion) useLearnedMotions.getState().save(cmd.saveAs, cmd.motion)
+          if (say) { log('sari', say); void speak(say) }
+          setSariThinking(false)
         } else {
+          // Forward to the main Claude Code agent.
+          setSariThinking(false)
           setPending(true)
           sendMessageStream(chatId, full)
         }
@@ -662,6 +791,9 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
     return () => clearTimeout(t)
   }, [pending])
 
+  // Hide the prompt box once execution (Sari or Claude) finishes.
+  useEffect(() => { if (!thinking && !sariThinking) setPromptBox('') }, [thinking, sariThinking])
+
   return (
     <div className="flex flex-col h-full w-full overflow-hidden">
       {/* Stage + transcript */}
@@ -671,21 +803,70 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
           {/* 3D stage */}
           <VrmStage url={vrmUrl} zoom={zoom} thinkingRef={thinkingRef} activeRef={activeRef} interactiveRef={interactiveRef} cueRef={cueRef} onStatus={setStatus} />
 
-          {/* Synced subtitle box (left / right of the character) */}
+          {/* Live agent badge — name, model, token usage, last execution */}
+          {liveAssistant && (
+            <div className="absolute top-3 left-3 z-10">
+              <LiveBadge />
+            </div>
+          )}
+
+          {/* Synced subtitle box (response) */}
           <Subtitle side={side} />
 
-          {/* Thinking indicator */}
-          {thinking && (
+          {/* User prompt box — opposite side of the response subtitle; hides when done */}
+          {promptBox && (
+            <div className={cn('absolute top-1/2 -translate-y-1/2 max-w-[280px] z-10', side === 'left' ? 'right-4' : 'left-4')}>
+              <div className="rounded-2xl border border-white/15 bg-bg/80 backdrop-blur px-4 py-3 shadow-2xl">
+                <span className="flex items-center gap-1 text-[10px] font-mono text-muted/60 mb-1">
+                  <User className="w-2.5 h-2.5" /> You
+                </span>
+                <p className="text-sm leading-relaxed text-text break-words">{promptBox}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Thinking indicator — shows for both Sari (live-assistant) and Claude */}
+          {(thinking || sariThinking) && !needsConfirm && (
             <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 rounded-full bg-bg/80 backdrop-blur border border-white/10 px-3 py-1.5">
               <span className="flex gap-1">
                 {[0, 150, 300].map(d => <span key={d} className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: `${d}ms` }} />)}
               </span>
-              <span className="text-xs font-mono text-muted">sedang berpikir…</span>
+              <span className="text-xs font-mono text-muted">
+                {sariThinking ? `${assistantName || 'Assistant'} berpikir…` : 'sedang berpikir…'}
+              </span>
             </div>
           )}
 
-          {/* Top-right: mute + settings */}
+          {/* Permission confirmation — for write/exec tools (reads auto-approved) */}
+          {needsConfirm && pendingPermission && (
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 w-[330px] rounded-xl border border-warning/40 bg-bg/95 backdrop-blur p-3 shadow-2xl">
+              <p className="flex items-center gap-1.5 text-xs font-mono text-warning mb-1.5">
+                <ShieldAlert className="w-3.5 h-3.5" /> Konfirmasi izin
+              </p>
+              <p className="text-[11px] text-text mb-2 break-words">
+                <span className="font-semibold">{pendingPermission.tool}</span>
+                {pendingPermission.input && <span className="text-muted"> — {pendingPermission.input.slice(0, 120)}</span>}
+              </p>
+              <div className="flex gap-2">
+                <button onClick={() => chatId && respondPermission(chatId, false)}
+                  className="flex-1 py-1.5 rounded-lg text-xs font-mono bg-surface2 text-muted hover:text-error cursor-pointer transition-colors">
+                  Tolak
+                </button>
+                <button onClick={() => chatId && respondPermission(chatId, true)}
+                  className="flex-1 py-1.5 rounded-lg text-xs font-mono font-semibold bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors">
+                  Izinkan
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Top-right: confirmation badge + mute + settings */}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-1">
+            {needsConfirm && (
+              <span className="flex items-center gap-1 rounded-lg bg-warning/15 border border-warning/40 px-2 py-1 text-[10px] font-mono text-warning animate-pulse" title="Menunggu konfirmasi izin">
+                <ShieldAlert className="w-3.5 h-3.5" /> Konfirmasi
+              </span>
+            )}
             <button onClick={() => { if (autoSpeak) stopSpeaking(); setAutoSpeak(!autoSpeak) }}
               title={autoSpeak ? 'Matikan suara' : 'Aktifkan suara'}
               className={cn('p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 cursor-pointer transition-colors',
@@ -733,7 +914,7 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
         </div>
 
         {/* Conversation log (same session as Chat) */}
-        {showLog && <Transcript chatId={chatId} />}
+        {showLog && <Transcript chatId={chatId} avatarLog={avatarLog} sariThinking={sariThinking} claudeThinking={thinking} assistantName={assistantName} />}
       </div>
 
       {/* Type + speech-to-text + send — same input as the Chat tab */}

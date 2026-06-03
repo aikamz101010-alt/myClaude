@@ -32,6 +32,7 @@ interface AvatarStore {
   voiceGender: 'woman' | 'man' // selects male/female neural + offline voices
   liveAssistant: boolean    // ON → a separate-session subagent drives the character (default OFF)
   liveModel: 'haiku' | 'sonnet' | 'opus' // model for the live-assistant director
+  fullMotion: boolean       // allow the agent to trigger dynamic full-body motions (dance, etc.)
 
   setEnabled: (v: boolean) => void
   toggleEnabled: () => void
@@ -54,6 +55,7 @@ interface AvatarStore {
   setVoiceGender: (g: 'woman' | 'man') => void
   setLiveAssistant: (v: boolean) => void
   setLiveModel: (m: 'haiku' | 'sonnet' | 'opus') => void
+  setFullMotion: (v: boolean) => void
 }
 
 export const DEFAULT_VRM_URL = '/avatar/character.vrm'
@@ -83,6 +85,7 @@ export const useAvatarStore = create<AvatarStore>()(
       voiceGender: 'woman',
       liveAssistant: false, // subagent control OFF by default
       liveModel: 'haiku',
+      fullMotion: true,
 
       setEnabled: v => set({ enabled: v }),
       toggleEnabled: () => set(s => ({ enabled: !s.enabled })),
@@ -105,6 +108,7 @@ export const useAvatarStore = create<AvatarStore>()(
       setVoiceGender: g => set({ voiceGender: g }),
       setLiveAssistant: v => set({ liveAssistant: v }),
       setLiveModel: m => set({ liveModel: m }),
+      setFullMotion: v => set({ fullMotion: v }),
     }),
     { name: 'claudex-avatar' },
   ),

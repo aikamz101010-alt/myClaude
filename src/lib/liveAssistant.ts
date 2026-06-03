@@ -7,7 +7,9 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useAvatarStore } from '@/store/avatarStore'
-import { STANDBY_POSES, SPEAK_GESTURES } from './standbyPoses'
+import { useLiveStatus } from '@/store/liveStatusStore'
+import { useLearnedMotions } from '@/store/learnedMotionsStore'
+import { STANDBY_POSES, SPEAK_GESTURES, MOTION_NAMES } from './standbyPoses'
 
 export const EMOTIONS = ['neutral', 'happy', 'sad', 'angry', 'surprised', 'relaxed'] as const
 export type Emotion = (typeof EMOTIONS)[number]
@@ -24,9 +26,13 @@ export const LIVE_MODEL_ID: Record<'haiku' | 'sonnet' | 'opus', string> = {
   opus: 'claude-opus-4-8',
 }
 
-/** All gesture names the director may choose from (idle + speaking). */
+/** All gesture names the director may choose from. Includes dynamic full-body
+ * motions (dance, cheer, …) when the Full-Motion setting is on. */
 export function gestureNames(): string[] {
-  return [...new Set([...SPEAK_GESTURES.map(g => g.name), ...STANDBY_POSES.map(p => p.name)])]
+  const base = [...new Set([...SPEAK_GESTURES.map(g => g.name), ...STANDBY_POSES.map(p => p.name)])]
+  const learned = Object.keys(useLearnedMotions.getState().motions)
+  const dyn = useAvatarStore.getState().fullMotion ? MOTION_NAMES : []
+  return [...base, ...dyn, ...learned]
 }
 
 const AGENT_PATH = '~/.claude/agents/live-virtual-assistant.md'
@@ -90,12 +96,13 @@ Output ONLY compact JSON: {"emotion":"<emotion>","gesture":"<gesture>"}. Never u
 Reply:
 ${reply.slice(0, 2000)}`
 
+  let tokIn = 0, tokOut = 0
   let resolveDone!: () => void
   const done = new Promise<void>(r => { resolveDone = r })
 
   // Register the listener BEFORE invoking so no events are missed.
   const unlisten = await listen<{
-    kind: string; text?: string | null; request_id?: string | null
+    kind: string; text?: string | null; request_id?: string | null; input_tokens?: number | null; output_tokens?: number | null
   }>(`chat:event:${channel}`, ev => {
     const e = ev.payload
     if (e.kind === 'text' && e.text) acc += e.text
@@ -103,11 +110,13 @@ ${reply.slice(0, 2000)}`
       // The director must not use tools — auto-deny so it never blocks.
       invoke('respond_permission', { chatId: channel, requestId: e.request_id, allow: false, message: 'no tools' }).catch(() => {})
     } else if (e.kind === 'done' || e.kind === 'error') {
+      tokIn = e.input_tokens ?? 0; tokOut = e.output_tokens ?? 0
       resolveDone()
     }
   })
 
   const { liveModel } = useAvatarStore.getState()
+  useLiveStatus.getState().start()
   try {
     await invoke('send_chat_stream', {
       projectId: channel,           // separate event channel = separate session
@@ -122,16 +131,61 @@ ${reply.slice(0, 2000)}`
     return null
   } finally {
     unlisten()
+    useLiveStatus.getState().finish(tokIn, tokOut)
   }
 
   if (id !== seq) return null // superseded by a newer reply
   return parseCue(acc)
 }
 
+/** One animated channel of an agent-composed motion: a bone's axis driven as
+ * base + sin(time*freq + phase) * amp. Lets the agent invent movements that
+ * aren't in the fixed gesture library. */
+export interface MotionChannel {
+  bone: string
+  axis: 'x' | 'y' | 'z'
+  base?: number
+  amp?: number
+  freq?: number
+  phase?: number
+}
+
+export const MOTION_BONES = [
+  'head', 'neck', 'spine', 'chest', 'hips',
+  'leftUpperArm', 'rightUpperArm', 'leftLowerArm', 'rightLowerArm',
+  'leftHand', 'rightHand', 'leftUpperLeg', 'rightUpperLeg',
+]
+const MOTION_BONE_SET = new Set(MOTION_BONES)
+const clampN = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
+
+function parseMotion(raw: unknown): MotionChannel[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: MotionChannel[] = []
+  for (const c of raw.slice(0, 14)) {
+    if (!c || typeof c !== 'object') continue
+    const ch = c as Record<string, unknown>
+    const bone = String(ch.bone ?? '')
+    const axis = String(ch.axis ?? '')
+    if (!MOTION_BONE_SET.has(bone) || !['x', 'y', 'z'].includes(axis)) continue
+    out.push({
+      bone,
+      axis: axis as 'x' | 'y' | 'z',
+      base: clampN(Number(ch.base) || 0, -3.2, 3.2),
+      amp: clampN(Number(ch.amp) || 0, -3.2, 3.2),
+      freq: clampN(Number(ch.freq) || 0, 0, 15),
+      phase: Number(ch.phase) || 0,
+    })
+  }
+  return out.length ? out : undefined
+}
+
 export interface AvatarCommand {
-  action: 'perform' | 'forward'
+  action: 'perform' | 'forward' | 'save-motion'
   emotion?: Emotion
   gesture?: string
+  motion?: MotionChannel[]
+  saveAs?: string  // on perform: also save the composed motion under this name
+  name?: string    // on save-motion: name to save the previous motion under
   say?: string
 }
 
@@ -149,23 +203,37 @@ Decide who this is for:
 - If it is a software / coding / file / terminal task for the main Claude Code assistant, reply:
   {"action":"forward"}
 Allowed emotions: ${EMOTIONS.join(', ')}. Allowed gestures: ${gestureNames().join(', ')}, none.
+
+If no listed gesture fits, you may COMPOSE a custom movement with a "motion" array instead of "gesture":
+  {"action":"perform","emotion":"happy","motion":[{"bone":"rightUpperArm","axis":"x","base":-2.5,"amp":0.3,"freq":8},{"bone":"hips","axis":"z","amp":0.12,"freq":7}],"say":"..."}
+Each channel animates bone.axis as base + sin(time*freq + phase) * amp (radians).
+Allowed bones: ${MOTION_BONES.join(', ')}. axis: x|y|z. base/amp about -3..3, freq about 0..12. Use several channels for a lively move.
+
+To remember a composed motion for reuse, add "saveAs":"<short-name>" to the perform reply.
+If the user asks to SAVE / remember / "simpan" the previous movement, reply: {"action":"save-motion","name":"<short-name>"}.
+
 Output ONLY compact JSON on one line. Never use tools.`
 
   const id = ++seq
   const channel = `__director__-${id}`
   let acc = ''
+  let tokIn = 0, tokOut = 0
   let resolveDone!: () => void
   const done = new Promise<void>(r => { resolveDone = r })
-  const unlisten = await listen<{ kind: string; text?: string | null; request_id?: string | null }>(
+  const unlisten = await listen<{ kind: string; text?: string | null; request_id?: string | null; input_tokens?: number | null; output_tokens?: number | null }>(
     `chat:event:${channel}`,
     ev => {
       const e = ev.payload
       if (e.kind === 'text' && e.text) acc += e.text
       else if (e.kind === 'permission_request' && e.request_id) {
         invoke('respond_permission', { chatId: channel, requestId: e.request_id, allow: false, message: 'no tools' }).catch(() => {})
-      } else if (e.kind === 'done' || e.kind === 'error') resolveDone()
+      } else if (e.kind === 'done' || e.kind === 'error') {
+        tokIn = e.input_tokens ?? 0; tokOut = e.output_tokens ?? 0
+        resolveDone()
+      }
     },
   )
+  useLiveStatus.getState().start()
   try {
     await invoke('send_chat_stream', {
       projectId: channel, message: prompt, workingDir,
@@ -176,21 +244,31 @@ Output ONLY compact JSON on one line. Never use tools.`
     return { action: 'forward' } // on failure, let the main agent handle it
   } finally {
     unlisten()
+    useLiveStatus.getState().finish(tokIn, tokOut)
   }
 
   const m = acc.match(/\{[\s\S]*?\}/)
+  console.log('[live-assistant] command:', userText, '→ model:', LIVE_MODEL_ID[liveModel], '→ raw:', acc.slice(0, 300))
   if (!m) return { action: 'forward' }
   try {
-    const o = JSON.parse(m[0]) as { action?: string; emotion?: string; gesture?: string; say?: string }
+    const o = JSON.parse(m[0]) as { action?: string; emotion?: string; gesture?: string; motion?: unknown; saveAs?: string; name?: string; say?: string }
+    if (o.action === 'save-motion') {
+      return { action: 'save-motion', name: typeof o.name === 'string' ? o.name : '' }
+    }
     if (o.action === 'perform') {
-      return {
+      const result: AvatarCommand = {
         action: 'perform',
         emotion: (EMOTIONS as readonly string[]).includes(o.emotion ?? '') ? (o.emotion as Emotion) : 'happy',
         gesture: typeof o.gesture === 'string' ? o.gesture : 'none',
+        motion: parseMotion(o.motion),
+        saveAs: typeof o.saveAs === 'string' ? o.saveAs : undefined,
         say: typeof o.say === 'string' ? o.say : '',
       }
+      console.log('[live-assistant] perform:', result)
+      return result
     }
-  } catch { /* fall through */ }
+  } catch (e) { console.warn('[live-assistant] parse failed:', e) }
+  console.log('[live-assistant] forward to main Claude Code')
   return { action: 'forward' }
 }
 
@@ -215,9 +293,15 @@ ${persona || 'Friendly, warm, and helpful.'}
 ## What you can do
 - Show emotions: ${EMOTIONS.join(', ')}
 - Play gestures: ${gestureNames().join(', ')}, none
+- Compose CUSTOM dynamic motions when no gesture fits, via a "motion" array of
+  channels: { bone, axis (x|y|z), base, amp, freq, phase } → animated as
+  base + sin(time*freq + phase) * amp. Bones: ${MOTION_BONES.join(', ')}.
+- Save a composed motion for reuse: add "saveAs":"<name>" on a perform, or reply
+  { "action":"save-motion", "name":"<name>" } when asked to remember the last move.
+  Saved motions then appear as named gestures you can replay later.
 
 ## How to behave
-- When the user talks to you directly (greetings, chit-chat, "menari"/"dance", "wave", "look happy", questions about you), respond in character with a fitting emotion + gesture, and a short spoken reply in the user's language.
+- When the user talks to you directly (greetings, chit-chat, "menari"/"dance", "wave", "look happy", questions about you), respond in character with a fitting emotion + gesture (or a composed motion), and a short spoken reply in the user's language.
 - When the user asks for software / coding / file / terminal work, that is for the main Claude Code assistant — let it be forwarded.
 - Keep spoken replies short and natural.
 

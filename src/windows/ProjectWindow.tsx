@@ -119,10 +119,12 @@ export function ProjectWindow({ project, onBack }: Props) {
     setTimeout(() => sendMessageStream(id, prompt), 150)
   }, [createChat, project.id, project.path, sendMessageStream])
 
+  const charPending = activeChatId ? !!chats[activeChatId]?.pendingPermission : false
+
   const tabs: { key: Tab; icon: typeof MessageSquare; label: string; dot?: boolean }[] = [
     { key: 'chat',      icon: MessageSquare,  label: 'Chat'      },
     { key: 'terminal',  icon: Terminal,       label: 'Terminal', dot: ptyRunning },
-    { key: 'character', icon: PersonStanding, label: assistantName || 'Character' },
+    { key: 'character', icon: PersonStanding, label: assistantName || 'Character', dot: charPending },
     { key: 'contract',  icon: FileText,       label: 'Contract'  },
   ]
 

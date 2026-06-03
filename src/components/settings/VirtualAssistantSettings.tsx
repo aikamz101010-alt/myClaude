@@ -27,6 +27,7 @@ export function VirtualAssistantSettings() {
   const [vrmUrl, setVrmUrl] = useState(store.vrmUrl)
   const [vrmLabel, setVrmLabel] = useState(store.vrmUrl === DEFAULT_VRM_URL ? 'Bawaan (Claudia)' : 'VRM custom')
   const [model, setModel] = useState<LiveModel>(store.liveModel)
+  const [fullMotion, setFullMotion] = useState(store.fullMotion)
   const [saved, setSaved] = useState(false)
 
   const isCustomVrm = vrmUrl !== DEFAULT_VRM_URL
@@ -58,6 +59,7 @@ export function VirtualAssistantSettings() {
     store.setVoiceGender(isCustomVrm ? gender : 'woman')
     store.setVrmUrl(vrmUrl)
     store.setLiveModel(model)
+    store.setFullMotion(fullMotion)
     // Generate/refresh the live-virtual-assistant agent file from the persona.
     void ensureLiveAssistantAgent()
     setSaved(true)
@@ -162,6 +164,20 @@ export function VirtualAssistantSettings() {
           {model === 'haiku' ? 'Cepat & hemat kuota (disarankan)' : model === 'sonnet' ? 'Lebih cerdas, kuota lebih besar' : 'Paling cerdas, kuota paling besar'}
         </p>
       </div>
+
+      {/* Full motion control */}
+      <button onClick={() => setFullMotion(!fullMotion)}
+        className="w-full flex items-center justify-between cursor-pointer text-left">
+        <span className="text-[11px] text-text pr-2">
+          Kontrol gerak penuh
+          <span className="block text-[10px] text-muted/60">
+            Izinkan Sari memicu gerakan dinamis (joget, tepuk tangan, membungkuk, dll), bukan hanya pose statis
+          </span>
+        </span>
+        <span className={cn('relative w-8 h-4 rounded-full transition-colors flex-shrink-0', fullMotion ? 'bg-accent' : 'bg-white/15')}>
+          <span className={cn('absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all', fullMotion ? 'left-4' : 'left-0.5')} />
+        </span>
+      </button>
 
       {/* Save */}
       <button onClick={save} disabled={!canSave}
