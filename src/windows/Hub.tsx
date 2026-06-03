@@ -899,6 +899,74 @@ function LibraryItem({ item, tab }: { item: SkillItem; tab: LibTab }) {
 }
 // ────────────────────────────────────────────────────────────────
 
+// ── Startup Update Modal ─────────────────────────────────────────
+// Shown automatically on launch when a newer version is available.
+function StartupUpdateModal({ update, onClose }: { update: Update; onClose: () => void }) {
+  const [installing, setInstalling] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  const handleInstall = async () => {
+    setInstalling(true); setMsg('Mengunduh…')
+    try {
+      await update.downloadAndInstall()
+      setMsg('Terpasang — memulai ulang…')
+      await relaunch()
+    } catch (e) {
+      setMsg(`❌ ${String(e)}`)
+      setInstalling(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-[440px] max-w-[90vw] rounded-2xl bg-surface border border-white/10 shadow-2xl overflow-hidden"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-white/5">
+          <RefreshCw className="w-4 h-4 text-accent" />
+          <h2 className="text-sm font-mono font-bold text-text">Update Tersedia</h2>
+          <button onClick={onClose} className="ml-auto text-muted hover:text-text cursor-pointer">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="p-4">
+          <div className="flex items-center justify-between text-xs font-mono mb-1">
+            <span className="text-muted/70">Versi sekarang</span>
+            <span className="text-text">v{update.currentVersion}</span>
+          </div>
+          <div className="flex items-center justify-between text-xs font-mono mb-3">
+            <span className="text-muted/70">Versi baru</span>
+            <span className="text-accent font-semibold">v{update.version}</span>
+          </div>
+          {update.date && (
+            <p className="text-[11px] font-mono text-muted/60 mb-3">Rilis: {update.date.slice(0, 10)}</p>
+          )}
+          {update.body && (
+            <div className="mb-3">
+              <p className="text-xs font-mono font-semibold text-muted mb-1">Catatan rilis</p>
+              <div className="max-h-48 overflow-y-auto rounded-lg bg-surface2/50 border border-white/5 p-2">
+                <pre className="text-[11px] font-mono text-text whitespace-pre-wrap break-words">{update.body}</pre>
+              </div>
+            </div>
+          )}
+          {msg && (
+            <p className="text-xs font-mono mb-2" style={{ color: msg.startsWith('❌') ? '#EF4444' : '#94A3B8' }}>{msg}</p>
+          )}
+          <div className="flex gap-2">
+            <button onClick={onClose} disabled={installing}
+              className="flex-1 py-2.5 rounded-xl text-xs font-mono font-semibold bg-surface2 text-text hover:bg-surface2/70 cursor-pointer transition-colors disabled:opacity-40">
+              Nanti
+            </button>
+            <button onClick={handleInstall} disabled={installing}
+              className="flex-1 py-2.5 rounded-xl text-xs font-mono font-semibold bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed glow-accent">
+              {installing ? 'Menginstall…' : `Update ke v${update.version}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 interface HubProps {
   onOpenProject: (project: Project) => void
 }
@@ -913,6 +981,7 @@ export function Hub({ onOpenProject }: HubProps) {
   const [showSettings, setShowSettings] = useState(false)
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState<'added' | 'name' | 'activity'>('added')
+  const [startupUpdate, setStartupUpdate] = useState<Update | null>(null)
   const isAuthOk = authStatus.startsWith('✅')
   // Show the actual account + plan (e.g. "indera6th@gmail.com · max") instead of "Auth OK"
   const authLabel = authStatus.startsWith('✅ Signed in: ')
@@ -924,6 +993,8 @@ export function Hub({ onOpenProject }: HubProps) {
   useEffect(() => {
     loadProjects()
     loadLibrary()
+    // Auto-check for updates once on launch; show the modal if a newer version exists.
+    check().then(u => { if (u) setStartupUpdate(u) }).catch(() => {})
   }, [])
 
   const handleSubmit = async (name: string, path: string) => {
@@ -1164,6 +1235,7 @@ export function Hub({ onOpenProject }: HubProps) {
 
       {/* Settings Modal */}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {startupUpdate && <StartupUpdateModal update={startupUpdate} onClose={() => setStartupUpdate(null)} />}
 
       {/* Modals */}
       {modal && (
