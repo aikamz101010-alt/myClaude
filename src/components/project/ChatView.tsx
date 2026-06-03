@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import {
   Trash2, Terminal as TerminalIcon, RefreshCw, Bot, User,
   AlertCircle, DollarSign, ChevronDown, ChevronRight, Wrench,
-  Copy, Check, ShieldAlert,
+  Copy, Check, ShieldAlert, CornerDownLeft,
 } from 'lucide-react'
 
 interface Props {
@@ -232,6 +232,7 @@ export function ChatView({ chatId, slashCommands }: Props) {
   const injectText = pendingInsert[chatId]
 
   const [syncing, setSyncing] = useState(false)
+  const [permMsg, setPermMsg] = useState('')  // custom instruction for the permission popup
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const messages  = chat?.messages ?? []
@@ -346,18 +347,43 @@ export function ChatView({ chatId, slashCommands }: Props) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => respondPermission(chatId, true)}
+            <button onClick={() => { respondPermission(chatId, true); setPermMsg('') }}
               className="flex-1 py-1.5 rounded-lg text-xs font-mono font-semibold bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors">
               Allow
             </button>
-            <button onClick={() => respondPermission(chatId, false)}
+            <button onClick={() => { respondPermission(chatId, false); setPermMsg('') }}
               className="flex-1 py-1.5 rounded-lg text-xs font-mono bg-surface2 text-text hover:bg-surface2/70 cursor-pointer transition-colors">
               Deny
             </button>
-            <button onClick={() => respondPermission(chatId, true, true)}
+            <button onClick={() => { respondPermission(chatId, true, true); setPermMsg('') }}
               className="px-2.5 py-1.5 rounded-lg text-xs font-mono text-accent border border-accent/30 hover:bg-accent/10 cursor-pointer transition-colors"
               title="Allow this and all future tools (YOLO)">
               Always
+            </button>
+          </div>
+
+          {/* Custom instruction — deny & tell Claude what to do instead */}
+          <div className="flex items-center gap-2 mt-2">
+            <input
+              value={permMsg}
+              onChange={e => setPermMsg(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && permMsg.trim()) {
+                  e.preventDefault()
+                  respondPermission(chatId, false, false, permMsg)
+                  setPermMsg('')
+                }
+              }}
+              placeholder="Atau tulis instruksi untuk Claude (kirim = tolak + arahkan)…"
+              className="flex-1 bg-surface2/70 rounded-lg px-2.5 py-1.5 text-xs font-mono text-text placeholder-muted/50 focus:outline-none focus:ring-1 focus:ring-warning/40 border border-white/5"
+            />
+            <button
+              onClick={() => { if (permMsg.trim()) { respondPermission(chatId, false, false, permMsg); setPermMsg('') } }}
+              disabled={!permMsg.trim()}
+              title="Tolak & kirim instruksi ke Claude"
+              className="p-1.5 rounded-lg bg-warning/15 text-warning hover:bg-warning/25 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+            >
+              <CornerDownLeft className="w-4 h-4" />
             </button>
           </div>
         </div>

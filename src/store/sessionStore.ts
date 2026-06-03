@@ -88,7 +88,7 @@ interface SessionStore {
   setChatModel: (chatId: string, model: string) => void
   setChatPermissionMode: (chatId: string, mode: string) => void
   setChatYolo: (chatId: string, yolo: boolean) => void
-  respondPermission: (chatId: string, allow: boolean, alwaysAllow?: boolean) => void
+  respondPermission: (chatId: string, allow: boolean, alwaysAllow?: boolean, message?: string | null) => void
   interruptChat: (chatId: string) => void
   getProjectChats: (projectId: string) => Chat[]
 
@@ -258,12 +258,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       }
     }),
 
-  respondPermission: (chatId, allow, alwaysAllow) => {
+  respondPermission: (chatId, allow, alwaysAllow, message) => {
     const chat = get().chats[chatId]
     if (!chat?.pendingPermission) return
     const { requestId } = chat.pendingPermission
+    const note = message?.trim()
     invoke('respond_permission', {
-      chatId, requestId, allow, message: allow ? null : 'Denied by user',
+      chatId, requestId, allow,
+      // Custom instruction (if typed) is sent to Claude; else a sensible default.
+      message: note ? note : (allow ? null : 'Denied by user'),
     }).catch(() => {})
     set(s => {
       const c = s.chats[chatId]
