@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod auth_manager;
 mod commands;
 mod process;
 mod pty_manager;
@@ -11,14 +12,15 @@ use commands::{
     agent::{chat_message, interrupt_chat, respond_permission, send_chat_stream, send_to_agent, spawn_agent, stop_agent},
     session::{get_session_history, list_project_sessions},
     library::{
-        add_marketplace, auth_login, auth_logout, auth_status_json, create_agent,
-        ensure_lead_orchestrator, get_auth_status, get_claude_binary,
+        add_marketplace, auth_login, auth_logout, auth_status_json, auth_submit_code,
+        create_agent, ensure_lead_orchestrator, get_auth_status, get_claude_binary,
         get_library, init_skill, install_github_skill, install_plugin,
         list_github_skills, rescan_library, set_api_key,
     },
     project::{create_project, delete_project, get_projects, list_directory, read_contract, read_file, touch_project, write_contract, write_file},
     terminal::{is_pty_running, resize_pty, start_pty, stop_pty, write_pty},
 };
+use auth_manager::AuthManager;
 use process::ProcessManager;
 use pty_manager::PtyManager;
 use sidecar_manager::SidecarManager;
@@ -115,6 +117,7 @@ fn main() {
     let app_state = AppState::new();
     let process_manager = ProcessManager::new();
     let pty_manager = PtyManager::new();
+    let auth_manager = AuthManager::new();
     let sidecar_manager = SidecarManager::new();
 
     tauri::Builder::default()
@@ -122,9 +125,12 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(app_state.clone())
         .manage(process_manager)
         .manage(pty_manager)
+        .manage(auth_manager)
         .manage(sidecar_manager.clone())
         .setup(move |_app| {
             // Capture shell env (ANTHROPIC_API_KEY etc.)
@@ -172,6 +178,7 @@ fn main() {
             set_api_key,
             auth_status_json,
             auth_login,
+            auth_submit_code,
             auth_logout,
             // Plugin / skill / agent management
             install_plugin,

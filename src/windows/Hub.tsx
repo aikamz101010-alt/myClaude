@@ -6,9 +6,13 @@ import { useProjectStore } from '@/store/projectStore'
 import { useLibraryStore } from '@/store/libraryStore'
 import { useSessionStore } from '@/store/sessionStore'
 import { cn } from '@/lib/utils'
-import { Plus, RefreshCw, Cpu, Terminal, FolderOpen, FolderInput, X, Settings, CheckCircle, AlertTriangle, Search, Globe, LogIn, LogOut, KeyRound } from 'lucide-react'
+import { Plus, RefreshCw, Cpu, Terminal, FolderOpen, FolderInput, X, Settings, CheckCircle, AlertTriangle, Search, Globe, LogIn, LogOut, KeyRound, Copy, ExternalLink, Check } from 'lucide-react'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { getVersion } from '@tauri-apps/api/app'
+import { check, type Update } from '@tauri-apps/plugin-updater'
+import { relaunch } from '@tauri-apps/plugin-process'
 import type { Project } from '@/store/projectStore'
 import type { SkillItem } from '@/store/libraryStore'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
@@ -215,6 +219,10 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [authInfo, setAuthInfo] = useState<{ loggedIn?: boolean; email?: string; subscriptionType?: string; authMethod?: string } | null>(null)
   const [loggingIn, setLoggingIn] = useState(false)
   const [loginLog, setLoginLog] = useState<string[]>([])
+  const [loginUrl, setLoginUrl] = useState('')      // OAuth login URL from the CLI
+  const [urlCopied, setUrlCopied] = useState(false)
+  const [authCode, setAuthCode] = useState('')      // code pasted back from the browser
+  const [submittingCode, setSubmittingCode] = useState(false)
 
   const setFeedbackTemp = (msg: string) => {
     setFeedback(msg)
@@ -234,14 +242,23 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const handleBrowserLogin = async (mode: 'claudeai' | 'console') => {
     setLoggingIn(true)
     setLoginLog([])
+    setLoginUrl('')
+    setAuthCode('')
+    setUrlCopied(false)
     const unlistenEvt = await listen<string>('auth:event', e => {
       setLoginLog(prev => [...prev, e.payload].slice(-8))
     })
+    const unlistenUrl = await listen<string>('auth:url', e => {
+      // Show the link with copy/open controls — user opens it when ready.
+      setLoginUrl(e.payload)
+    })
     const unlistenDone = await listen<{ success: boolean; error?: string }>('auth:done', async e => {
-      unlistenEvt(); unlistenDone()
+      unlistenEvt(); unlistenUrl(); unlistenDone()
       setLoggingIn(false)
+      setLoginUrl('')
+      setAuthCode('')
       if (e.payload.success) {
-        setFeedbackTemp('✅ Signed in via browser')
+        setFeedbackTemp('✅ Signed in via subscription')
         await loadAuthInfo()
         await reloadLibrary()
       } else {
@@ -251,9 +268,33 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     try {
       await invoke('auth_login', { mode })
     } catch (err) {
-      unlistenEvt(); unlistenDone()
+      unlistenEvt(); unlistenUrl(); unlistenDone()
       setLoggingIn(false)
       setFeedbackTemp(`❌ ${String(err)}`)
+    }
+  }
+
+  // Copy the OAuth login URL to the clipboard
+  const handleCopyUrl = async () => {
+    if (!loginUrl) return
+    try {
+      await navigator.clipboard.writeText(loginUrl)
+      setUrlCopied(true)
+      setTimeout(() => setUrlCopied(false), 1500)
+    } catch { setFeedbackTemp('❌ Could not copy') }
+  }
+
+  // Send the pasted authorization code back to the waiting CLI
+  const handleSubmitCode = async () => {
+    if (!authCode.trim()) return
+    setSubmittingCode(true)
+    try {
+      await invoke('auth_submit_code', { code: authCode.trim() })
+      setFeedbackTemp('⏳ Verifying code…')
+    } catch (err) {
+      setFeedbackTemp(`❌ ${String(err)}`)
+    } finally {
+      setSubmittingCode(false)
     }
   }
 
@@ -264,6 +305,46 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       await loadAuthInfo()
       await reloadLibrary()
     } catch (e) { setFeedbackTemp(`❌ ${String(e)}`) }
+  }
+
+  // ── App update ──────────────────────────────────────────────
+  const [currentVersion, setCurrentVersion] = useState('')
+  const [checking, setChecking] = useState(false)
+  const [newVersion, setNewVersion] = useState<string | null>(null)
+  const [updateMsg, setUpdateMsg] = useState('')
+  const [installing, setInstalling] = useState(false)
+  const updateRef = useRef<Update | null>(null)
+
+  useEffect(() => { getVersion().then(setCurrentVersion).catch(() => {}) }, [])
+
+  const handleCheckUpdate = async () => {
+    setChecking(true); setUpdateMsg(''); setNewVersion(null); updateRef.current = null
+    try {
+      const upd = await check()
+      if (upd) {
+        updateRef.current = upd
+        setNewVersion(upd.version)
+      } else {
+        setUpdateMsg('✅ Sudah versi terbaru')
+      }
+    } catch (e) {
+      setUpdateMsg(`❌ ${String(e)}`)
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const handleInstallUpdate = async () => {
+    if (!updateRef.current) return
+    setInstalling(true); setUpdateMsg('Downloading…')
+    try {
+      await updateRef.current.downloadAndInstall()
+      setUpdateMsg('Installed — restarting…')
+      await relaunch()
+    } catch (e) {
+      setUpdateMsg(`❌ ${String(e)}`)
+      setInstalling(false)
+    }
   }
 
   // Save API key → set in runtime + append to profile file
@@ -385,13 +466,53 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                 <LogIn className="w-3.5 h-3.5" /> API billing
               </button>
             </div>
+            {/* OAuth login URL — shown + copyable, opens automatically */}
+            {loginUrl && (
+              <div className="mt-3 p-2.5 rounded-lg bg-surface border border-accent/20">
+                <p className="text-xs font-mono font-semibold text-accent mb-1.5">Login link</p>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    readOnly
+                    value={loginUrl}
+                    onFocus={e => e.currentTarget.select()}
+                    className="flex-1 min-w-0 bg-surface2 rounded-md px-2 py-1.5 text-xs font-mono text-muted truncate outline-none border border-white/5"
+                  />
+                  <button onClick={handleCopyUrl} title="Copy link"
+                    className="flex items-center gap-1 px-2 py-1.5 rounded-md text-xs font-mono bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors flex-shrink-0">
+                    {urlCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    {urlCopied ? 'Copied' : 'Copy'}
+                  </button>
+                  <button onClick={() => openUrl(loginUrl)} title="Open in browser"
+                    className="flex items-center justify-center px-2 py-1.5 rounded-md text-xs font-mono bg-surface2 text-text hover:bg-surface border border-white/10 cursor-pointer transition-colors flex-shrink-0">
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <p className="text-xs font-mono text-muted/60 mt-2 mb-1">
+                  Authorize in the browser, copy the code shown, paste it here:
+                </p>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    value={authCode}
+                    onChange={e => setAuthCode(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleSubmitCode() }}
+                    placeholder="Paste authentication code…"
+                    className="flex-1 min-w-0 bg-surface2 rounded-md px-2 py-1.5 text-xs font-mono text-text outline-none border border-white/5 focus:border-accent/40"
+                  />
+                  <button onClick={handleSubmitCode} disabled={!authCode.trim() || submittingCode}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-mono font-semibold bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0">
+                    {submittingCode ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
+                    Submit
+                  </button>
+                </div>
+              </div>
+            )}
             {loginLog.length > 0 && (
               <pre className="mt-2 max-h-28 overflow-y-auto bg-surface rounded-lg p-2 text-xs font-mono text-muted/80 whitespace-pre-wrap break-all">
                 {loginLog.join('\n')}
               </pre>
             )}
-            {loggingIn && (
-              <p className="text-xs font-mono text-muted/60 mt-2">Complete the login in your browser, then come back…</p>
+            {loggingIn && !loginUrl && (
+              <p className="text-xs font-mono text-muted/60 mt-2">Opening Claude's login page…</p>
             )}
           </div>
         )}
@@ -446,6 +567,42 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
             {feedback}
           </p>
         )}
+
+        {/* ── App Updates ─────────────────────────── */}
+        <div className="mb-4 p-3 rounded-xl bg-surface2/50 border border-white/5">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-mono font-semibold text-muted">App Update</p>
+            <button onClick={handleCheckUpdate} disabled={checking || installing}
+              className="flex items-center gap-1 text-xs font-mono text-accent hover:text-accent/80 cursor-pointer transition-colors disabled:opacity-40">
+              <RefreshCw className={cn('w-3 h-3', checking && 'animate-spin')} />
+              {checking ? 'Checking…' : 'Check for updates'}
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between text-xs font-mono">
+            <span className="text-muted/70">Current</span>
+            <span className="text-text">v{currentVersion || '—'}</span>
+          </div>
+
+          {newVersion && (
+            <>
+              <div className="flex items-center justify-between text-xs font-mono mt-1">
+                <span className="text-muted/70">Available</span>
+                <span className="text-accent font-semibold">v{newVersion}</span>
+              </div>
+              <button onClick={handleInstallUpdate} disabled={installing}
+                className="w-full mt-2 py-2 rounded-xl text-xs font-mono font-semibold bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed glow-accent">
+                {installing ? 'Installing…' : `Download & install v${newVersion}`}
+              </button>
+            </>
+          )}
+
+          {updateMsg && (
+            <p className="text-xs font-mono mt-2" style={{ color: updateMsg.startsWith('✅') ? '#22C55E' : updateMsg.startsWith('❌') ? '#EF4444' : '#94A3B8' }}>
+              {updateMsg}
+            </p>
+          )}
+        </div>
 
         {/* ── Claude CLI Binary ───────────────────── */}
         <div className="p-3 rounded-xl bg-surface2/30 border border-white/5">

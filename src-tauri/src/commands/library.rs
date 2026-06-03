@@ -1,3 +1,4 @@
+use crate::auth_manager::AuthManager;
 use crate::scanner;
 use crate::state::{AppState, SkillItem};
 use dirs::home_dir;
@@ -5,7 +6,7 @@ use dirs::home_dir;
 use scopeguard::defer;
 use serde_json::Value;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub async fn get_library(state: State<'_, Arc<AppState>>) -> Result<Vec<SkillItem>, String> {
@@ -54,60 +55,30 @@ pub async fn auth_status_json(state: State<'_, Arc<AppState>>) -> Result<String,
     Ok(stdout)
 }
 
-/// Start interactive browser OAuth login via `claude auth login`.
+/// Start interactive browser OAuth login via `claude auth login`, run inside a PTY
+/// so the CLI behaves interactively (prints the login URL, waits for the pasted code).
 /// mode = "claudeai" (subscription, default) | "console" (API billing).
-/// Streams progress as `auth:event` and emits `auth:done` { success } when finished.
+/// Emits: `auth:event` (output), `auth:url` (login URL), `auth:done` { success }.
 #[tauri::command]
 pub async fn auth_login(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
+    auth: State<'_, Arc<AuthManager>>,
     mode: String,
 ) -> Result<(), String> {
-    use std::io::{BufRead, BufReader};
     let binary = state.claude_binary.read().clone().ok_or("Claude CLI not found")?;
-    // Drop ANTHROPIC_API_KEY so the OAuth flow runs (key would short-circuit auth)
-    let shell_env: Vec<(String, String)> = state.shell_env.read().clone()
-        .into_iter().filter(|(k, _)| k != "ANTHROPIC_API_KEY").collect();
+    let shell_env: Vec<(String, String)> = state.shell_env.read().clone().into_iter().collect();
+    let flag = if mode == "console" { "--console" } else { "--claudeai" }.to_string();
+    auth.inner().start(app, binary, shell_env, flag).map_err(|e| e.to_string())
+}
 
-    let flag = if mode == "console" { "--console" } else { "--claudeai" };
-
-    std::thread::spawn(move || {
-        let mut cmd = std::process::Command::new(&binary);
-        cmd.args(["auth", "login", flag])
-            .env_remove("ANTHROPIC_API_KEY")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        for (k, v) in &shell_env { cmd.env(k, v); }
-
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => { let _ = app.emit("auth:done", serde_json::json!({"success": false, "error": e.to_string()})); return; }
-        };
-
-        // Stream stdout + stderr lines as auth:event (CLI prints the login URL here)
-        if let Some(stdout) = child.stdout.take() {
-            let app2 = app.clone();
-            std::thread::spawn(move || {
-                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                    let _ = app2.emit("auth:event", line);
-                }
-            });
-        }
-        if let Some(stderr) = child.stderr.take() {
-            let app3 = app.clone();
-            std::thread::spawn(move || {
-                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                    let _ = app3.emit("auth:event", line);
-                }
-            });
-        }
-
-        let status = child.wait();
-        let success = status.map(|s| s.success()).unwrap_or(false);
-        let _ = app.emit("auth:done", serde_json::json!({"success": success}));
-    });
-
-    Ok(())
+/// Submit the OAuth authorization code (pasted from the browser) to the waiting CLI.
+#[tauri::command]
+pub async fn auth_submit_code(
+    auth: State<'_, Arc<AuthManager>>,
+    code: String,
+) -> Result<(), String> {
+    auth.inner().submit_code(&code).map_err(|e| e.to_string())
 }
 
 /// Log out: `claude auth logout`.
