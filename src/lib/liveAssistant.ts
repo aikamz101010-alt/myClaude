@@ -29,19 +29,31 @@ export function gestureNames(): string[] {
   return [...new Set([...SPEAK_GESTURES.map(g => g.name), ...STANDBY_POSES.map(p => p.name)])]
 }
 
-function buildPrompt(reply: string): string {
+const AGENT_PATH = '~/.claude/agents/live-virtual-assistant.md'
+
+/** Read the agent file body (its frontmatter stripped). This is the editable
+ * source of truth for the avatar's personality/behaviour. */
+async function readAgentBody(): Promise<string | null> {
+  try {
+    const raw = await invoke<string>('read_file', { path: AGENT_PATH })
+    const body = raw.replace(/^---[\s\S]*?---\s*/, '').trim()
+    return body || null
+  } catch {
+    return null
+  }
+}
+
+/** Base instructions for the avatar: its agent file if present (editable in Hub
+ * or directly), otherwise built from the persona in settings. */
+async function baseInstructions(): Promise<string> {
+  const fromFile = await readAgentBody()
+  if (fromFile) return fromFile
   const { assistantName, persona } = useAvatarStore.getState()
+  const name = assistantName || 'the assistant'
   return [
-    `You are the performance director for a 3D virtual assistant named ${assistantName || 'the assistant'}.`,
-    persona ? `The assistant's persona: ${persona}` : '',
-    `Read the assistant's reply below and choose ONE emotion and ONE gesture that best match its tone and content.`,
-    `Allowed emotions: ${EMOTIONS.join(', ')}.`,
-    `Allowed gestures: ${gestureNames().join(', ')}, none.`,
-    `Do NOT use any tools. Output ONLY compact JSON on a single line, nothing else:`,
-    `{"emotion":"<emotion>","gesture":"<gesture>"}`,
-    ``,
-    `Reply:`,
-    reply.slice(0, 2000),
+    `You are ${name}, a friendly 3D virtual-assistant avatar.`,
+    persona ? `Persona: ${persona}` : '',
+    `You can show emotions (${EMOTIONS.join(', ')}) and play gestures (${gestureNames().join(', ')}).`,
   ].filter(Boolean).join('\n')
 }
 
@@ -67,6 +79,17 @@ export async function runDirector(reply: string, workingDir: string): Promise<Pe
   const channel = `__director__-${id}`
   let acc = ''
 
+  // Build the prompt from the agent file (source of truth) + this task.
+  const prompt = `${await baseInstructions()}
+
+The assistant just replied (below). Pick ONE emotion and ONE gesture that match its tone.
+Allowed emotions: ${EMOTIONS.join(', ')}.
+Allowed gestures: ${gestureNames().join(', ')}, none.
+Output ONLY compact JSON: {"emotion":"<emotion>","gesture":"<gesture>"}. Never use tools.
+
+Reply:
+${reply.slice(0, 2000)}`
+
   let resolveDone!: () => void
   const done = new Promise<void>(r => { resolveDone = r })
 
@@ -88,7 +111,7 @@ export async function runDirector(reply: string, workingDir: string): Promise<Pe
   try {
     await invoke('send_chat_stream', {
       projectId: channel,           // separate event channel = separate session
-      message: buildPrompt(reply),
+      message: prompt,
       workingDir,
       sessionId: null,              // fresh session — no working-chat context
       model: LIVE_MODEL_ID[liveModel],
@@ -116,21 +139,17 @@ export interface AvatarCommand {
  * decides whether the user is talking TO the avatar (perform a gesture / chat)
  * or asking for coding work meant for the main Claude Code agent (forward). */
 export async function commandAvatar(userText: string, workingDir: string): Promise<AvatarCommand> {
-  const { assistantName, persona, liveModel } = useAvatarStore.getState()
-  const name = assistantName || 'the assistant'
-  const prompt = [
-    `You are ${name}, a friendly 3D virtual-assistant avatar.`,
-    persona ? `Persona: ${persona}` : '',
-    `The user said: "${userText}"`,
-    `Decide who this is for:`,
-    `- If it is addressed to YOU (the avatar) — to perform/express something (dance, wave, spin, look happy, greet) or to chat with you — reply:`,
-    `  {"action":"perform","emotion":"<emotion>","gesture":"<gesture>","say":"<short spoken reply in the user's language, max 160 chars>"}`,
-    `- If it is a software / coding / file / terminal task meant for the main Claude Code assistant, reply:`,
-    `  {"action":"forward"}`,
-    `Allowed emotions: ${EMOTIONS.join(', ')}.`,
-    `Allowed gestures: ${gestureNames().join(', ')}, none.`,
-    `Output ONLY compact JSON on one line. Never use tools.`,
-  ].filter(Boolean).join('\n')
+  const { liveModel } = useAvatarStore.getState()
+  const prompt = `${await baseInstructions()}
+
+The user said: "${userText}"
+Decide who this is for:
+- If it is addressed to YOU (perform/express something — dance, wave, spin, look happy, greet — or just chat), reply:
+  {"action":"perform","emotion":"<emotion>","gesture":"<gesture>","say":"<short spoken reply in the user's language, max 160 chars>"}
+- If it is a software / coding / file / terminal task for the main Claude Code assistant, reply:
+  {"action":"forward"}
+Allowed emotions: ${EMOTIONS.join(', ')}. Allowed gestures: ${gestureNames().join(', ')}, none.
+Output ONLY compact JSON on one line. Never use tools.`
 
   const id = ++seq
   const channel = `__director__-${id}`
@@ -184,18 +203,26 @@ export async function ensureLiveAssistantAgent(): Promise<void> {
   const name = assistantName || 'Assistant'
   const body = `---
 name: live-virtual-assistant
-description: Performance director for the ${name} virtual assistant avatar
+description: Brain & personality for the ${name} virtual-assistant avatar
+model: ${liveModel}
 ---
 
-You are the performance director for a 3D virtual assistant named ${name}.
+You are ${name}, a 3D virtual-assistant avatar.
 
-${persona ? `Persona:\n${persona}\n` : ''}
-Given an assistant reply, choose ONE emotion and ONE gesture matching its tone.
-- Emotions: ${EMOTIONS.join(', ')}
-- Gestures: ${gestureNames().join(', ')}, none
+## Persona
+${persona || 'Friendly, warm, and helpful.'}
 
-Output ONLY compact JSON: {"emotion":"<emotion>","gesture":"<gesture>"}
-Never use tools.
+## What you can do
+- Show emotions: ${EMOTIONS.join(', ')}
+- Play gestures: ${gestureNames().join(', ')}, none
+
+## How to behave
+- When the user talks to you directly (greetings, chit-chat, "menari"/"dance", "wave", "look happy", questions about you), respond in character with a fitting emotion + gesture, and a short spoken reply in the user's language.
+- When the user asks for software / coding / file / terminal work, that is for the main Claude Code assistant — let it be forwarded.
+- Keep spoken replies short and natural.
+
+> Edit this file to teach or adjust ${name}'s personality and behaviour.
+> (Saving the Virtual Assistant settings in the Hub regenerates this file.)
 `
   // Ensure ~/.claude/agents exists (create_agent runs create_dir_all first).
   try {

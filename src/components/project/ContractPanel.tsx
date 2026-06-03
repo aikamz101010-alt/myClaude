@@ -4,7 +4,8 @@ import { useLibraryStore, type SkillItem } from '@/store/libraryStore'
 import { useSessionStore, type Message } from '@/store/sessionStore'
 import { cn } from '@/lib/utils'
 import { useTagColors, type TagType } from '@/lib/tagColors'
-import { RefreshCw, CheckCircle, Circle, FileText, Loader2, ArrowRight, Bot, Clock, Search, X, ChevronDown, ChevronRight } from 'lucide-react'
+import { RefreshCw, CheckCircle, Circle, FileText, Loader2, ArrowRight, Bot, Clock, Search, X, ChevronDown, ChevronRight, Plus } from 'lucide-react'
+import { AddFromURL } from '@/components/library/AddFromURL'
 
 type Tab = 'skill' | 'agent' | 'plugin'
 
@@ -68,6 +69,7 @@ export function ContractPanel({ contractPath, activeChatId }: Props) {
   })
   const [loading, setLoading] = useState(false)
   const [view, setView] = useState<'active' | 'list'>('active')
+  const [showAdd, setShowAdd] = useState(false)
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [, forceTick] = useState(0)
@@ -264,11 +266,18 @@ export function ContractPanel({ contractPath, activeChatId }: Props) {
             <FileText className="w-3.5 h-3.5 text-accent" />
             <span className="text-xs font-mono font-bold text-text">Active</span>
           </div>
-          <button onClick={handleRefresh}
-            className="p-1 text-muted hover:text-accent cursor-pointer rounded-md hover:bg-surface2/50 transition-colors"
-            title="Refresh from contract & library">
-            <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <button onClick={() => setShowAdd(true)}
+              className="p-1 text-muted hover:text-accent cursor-pointer rounded-md hover:bg-surface2/50 transition-colors"
+              title="Add plugin / skill / agent from URL">
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={handleRefresh}
+              className="p-1 text-muted hover:text-accent cursor-pointer rounded-md hover:bg-surface2/50 transition-colors"
+              title="Refresh from contract & library">
+              <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
+            </button>
+          </div>
         </div>
         <p className="text-xs text-muted/60 font-mono">From CONTRACT.md</p>
       </div>
@@ -393,6 +402,9 @@ export function ContractPanel({ contractPath, activeChatId }: Props) {
           {view === 'active' ? `${totalInContract} active in contract` : `${items.length} items · click to add to prompt`}
         </p>
       </div>
+
+      {/* Add plugin / skill / agent from a GitHub URL — rescan on close so it appears */}
+      {showAdd && <AddFromURL onClose={() => { setShowAdd(false); rescan() }} />}
     </div>
   )
 }
