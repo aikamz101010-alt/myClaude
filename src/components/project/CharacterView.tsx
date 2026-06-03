@@ -10,7 +10,7 @@ import { enqueueSpeech, resetNarration, markNarrated, stopSpeaking, sanitizeForS
 import { cn } from '@/lib/utils'
 import { ChatInput, type AttachedFile } from './ChatInput'
 import { AvatarVoiceSettings } from '@/components/settings/AvatarVoiceSettings'
-import { STANDBY_POSES, nextStandbyPose } from '@/lib/standbyPoses'
+import { STANDBY_POSES, nextStandbyPose, SPEAK_GESTURES, nextSpeakGesture } from '@/lib/standbyPoses'
 
 interface Props {
   chatId: string | null
@@ -120,8 +120,12 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
     let idleGestureUntil = 0, nextIdleGestureAt = 4, idleGestureSide: 'l' | 'r' = 'r'
     // Standby pose cycling (VRoid-style): hold a pose, then switch to a random one.
     let standbyIdx = 0, standbyUntil = 0
+    // Speaking-gesture cycling: rotate through hands-up / wave / point / etc.
+    let speakIdx = 0, speakUntil = 0, waveSide: 'l' | 'r' | undefined
     // Double-click → glance: the character turns its head toward that screen point.
     let lookYaw = 0, lookPitch = 0, lookUntil = 0
+    // Hover → the head gently follows the cursor while it's over the stage.
+    let hoverYaw = 0, hoverPitch = 0, hovering = false
 
     const lerpRot = (
       b: THREE.Object3D | null | undefined,
@@ -140,6 +144,19 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
       lookUntil = clock.elapsedTime + 3.5                        // hold the glance briefly
     }
     renderer.domElement.addEventListener('dblclick', onDblClick)
+
+    // Hover → gentle continuous head-follow toward the cursor.
+    const onMouseMove = (e: MouseEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect()
+      const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1
+      const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1
+      hoverYaw = THREE.MathUtils.clamp(-nx, -1, 1) * 0.5    // softer than a double-click glance
+      hoverPitch = THREE.MathUtils.clamp(ny, -1, 1) * 0.32
+      hovering = true
+    }
+    const onMouseLeave = () => { hovering = false }
+    renderer.domElement.addEventListener('mousemove', onMouseMove)
+    renderer.domElement.addEventListener('mouseleave', onMouseLeave)
 
     const animate = () => {
       raf = requestAnimationFrame(animate)
@@ -208,8 +225,8 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
         const lookActive = time < lookUntil
         if (thinking) {
           gazeTX = -0.3; gazeTY = -0.35
-        } else if (lookActive) {
-          gazeTX = 0; gazeTY = 0   // eyes forward along the turned head
+        } else if (lookActive || hovering) {
+          gazeTX = 0; gazeTY = 0   // eyes forward along the turned/following head
         } else if (interactive && time > nextSaccadeAt) {
           gazeTX = (Math.random() * 2 - 1) * 0.6
           gazeTY = (Math.random() * 2 - 1) * 0.4
@@ -248,17 +265,25 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
           rUAz = 0.95; rUAx = -0.35 + Math.sin(time * 0.8) * 0.03; rLAz = 1.45
           lUAz = -1.30; lUAx = 0.08; lLAz = -0.30
         } else if (speaking) {
-          // Talking: forearms lifted in front of the torso, with varied
-          // multi-frequency motion so it never looks like a fixed loop.
-          const style = 0.5 + 0.5 * Math.sin(time * 0.27)                       // alternates lead hand
-          const beat = Math.sin(time * 2.4) * (0.75 + 0.25 * Math.sin(time * 0.9)) // varied amplitude
-          lUAz = -1.12 + beat * 0.12
-          lUAx = -0.55 - style * 0.18 + Math.sin(time * 2.1 + 0.7) * 0.24
-          rUAz = 1.12 - beat * 0.12
-          rUAx = -0.55 - (1 - style) * 0.18 + Math.sin(time * 2.6 + 1.9) * 0.24
-          lLAz = -0.85 - Math.abs(Math.sin(time * 2.1)) * 0.45
-          rLAz = 0.85 + Math.abs(Math.sin(time * 2.6 + 1.0)) * 0.45
+          // Talking: cycle through a repertoire of gestures (hands up, wave,
+          // open palms, point, present…) so it looks natural, not one fixed loop.
+          // A small live overlay keeps each held gesture breathing.
+          if (time > speakUntil) {
+            speakIdx = speakUntil === 0 ? 0 : nextSpeakGesture(speakIdx)
+            speakUntil = time + 1.8 + Math.random() * 1.6   // 1.8–3.4s per gesture
+          }
+          const g = SPEAK_GESTURES[speakIdx]
+          waveSide = g.wave
+          const o = Math.sin(time * 2.7)          // emphasis beat
+          const o2 = Math.sin(time * 3.6 + 1.0)
+          lUAz = g.lUAz + o * 0.06
+          lUAx = g.lUAx + o2 * 0.12
+          rUAz = g.rUAz - o * 0.06
+          rUAx = g.rUAx + o2 * 0.12
+          lLAz = g.lLAz - Math.abs(o) * 0.18
+          rLAz = g.rLAz + Math.abs(o) * 0.18
         } else {
+          waveSide = undefined
           // Standby: cycle through VRoid-style poses — hold one a few seconds,
           // then smoothly transition to a random different pose. A subtle breath
           // keeps the held pose from looking frozen.
@@ -278,12 +303,16 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
         lerpRot(rUA, 'z', rUAz, armK); lerpRot(rUA, 'x', rUAx, armK)
         lerpRot(lLA, 'z', lLAz, armK); lerpRot(rLA, 'z', rLAz, armK)
 
-        // Hands/wrists: subtle idle motion + varied flicks while speaking.
+        // Hands/wrists: subtle idle motion + varied flicks while speaking, and a
+        // brisk side-to-side wave on the raised hand when the gesture calls for it.
         const hw = interactive ? 1 : 0
         const speakHand = speaking ? Math.sin(time * 4.2) * 0.16 + Math.sin(time * 6.7) * 0.06 : 0
+        const wave = Math.sin(time * 7) * 0.5
+        const lWave = waveSide === 'l' ? wave : 0
+        const rWave = waveSide === 'r' ? wave : 0
         const lHand = bone('leftHand'); const rHand = bone('rightHand')
-        if (lHand) lHand.rotation.z = Math.sin(time * 1.7) * 0.06 * hw + speakHand - (idleGestureSide === 'l' ? idleG * 0.25 : 0)
-        if (rHand) rHand.rotation.z = Math.sin(time * 1.9 + 1) * 0.06 * hw - speakHand + (idleGestureSide === 'r' ? idleG * 0.25 : 0)
+        if (lHand) lHand.rotation.z = Math.sin(time * 1.7) * 0.06 * hw + speakHand + lWave - (idleGestureSide === 'l' ? idleG * 0.25 : 0)
+        if (rHand) rHand.rotation.z = Math.sin(time * 1.9 + 1) * 0.06 * hw - speakHand + rWave + (idleGestureSide === 'r' ? idleG * 0.25 : 0)
 
         // ── Body: weight shift + breathing ──
         const hips = bone('hips'); const spine = bone('spine')
@@ -310,7 +339,8 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
           } else {
             hx = lookX; hy = lookY; hz = Math.sin(time * 0.6) * 0.02
           }
-          if (lookActive) { hy = lookYaw; hx = lookPitch; hz = 0 }  // double-click glance
+          if (lookActive) { hy = lookYaw; hx = lookPitch; hz = 0 }            // double-click glance (priority)
+          else if (hovering && !thinking && !speaking) { hy = hoverYaw; hx = hoverPitch; hz = 0 } // hover-follow
           head.rotation.x += (hx - head.rotation.x) * 0.2
           head.rotation.y += (hy - head.rotation.y) * 0.2
           head.rotation.z += (hz - head.rotation.z) * 0.2
@@ -339,6 +369,8 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
       ground.geometry.dispose()
       ;(ground.material as THREE.Material).dispose()
       renderer.domElement.removeEventListener('dblclick', onDblClick)
+      renderer.domElement.removeEventListener('mousemove', onMouseMove)
+      renderer.domElement.removeEventListener('mouseleave', onMouseLeave)
       renderer.dispose()
       renderer.domElement.remove()
     }

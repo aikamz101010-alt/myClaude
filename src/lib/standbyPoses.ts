@@ -13,6 +13,7 @@ export interface StandbyPose {
   lLAz: number; rLAz: number
   spineY?: number   // optional slight torso turn for attitude
   headY?: number    // optional head turn
+  wave?: 'l' | 'r'  // (speaking gestures only) wave that hand
 }
 
 export const STANDBY_POSES: StandbyPose[] = [
@@ -37,5 +38,37 @@ export function nextStandbyPose(current: number): number {
   if (STANDBY_POSES.length <= 1) return 0
   let n = current
   while (n === current) n = Math.floor(Math.random() * STANDBY_POSES.length)
+  return n
+}
+
+// ── Speaking gestures ─────────────────────────────────────────────────────────
+// Cycled while the avatar narrates so gesticulation looks varied and lively
+// instead of one repeating motion. Forearms stay in front / raised (clear of the
+// skirt). `wave` makes that hand wave. The render loop adds a small live overlay
+// on top of each held gesture.
+export const SPEAK_GESTURES: StandbyPose[] = [
+  // Both hands explaining in front (open, mid height).
+  { name: 'explain', lUAz: -1.12, lUAx: -0.55, rUAz: 1.12, rUAx: -0.55, lLAz: -0.90, rLAz: 0.90 },
+  // Both hands raised up (emphatic).
+  { name: 'both-up', lUAz: -0.85, lUAx: -1.15, rUAz: 0.85, rUAx: -1.15, lLAz: -1.20, rLAz: 1.20 },
+  // Right hand up, waving.
+  { name: 'wave-right', lUAz: -1.32, lUAx: 0.06, rUAz: 0.70, rUAx: -1.28, lLAz: -0.18, rLAz: 1.30, wave: 'r', headY: 0.05 },
+  // Open palms out to the sides (presenting).
+  { name: 'open-palms', lUAz: -0.95, lUAx: -0.35, rUAz: 0.95, rUAx: -0.35, lLAz: -0.50, rLAz: 0.50 },
+  // Right index pointing up (making a point).
+  { name: 'point-up', lUAz: -1.15, lUAx: -0.45, rUAz: 0.60, rUAx: -1.38, lLAz: -0.70, rLAz: 0.85, spineY: -0.05 },
+  // Right hand presents to the side, left relaxed.
+  { name: 'present-right', lUAz: -1.32, lUAx: 0.06, rUAz: 0.80, rUAx: -0.50, lLAz: -0.18, rLAz: 0.55, spineY: -0.05, headY: 0.05 },
+  // Left hand up, waving (mirror).
+  { name: 'wave-left', lUAz: -0.70, lUAx: -1.28, rUAz: 1.32, rUAx: 0.06, lLAz: -1.30, rLAz: 0.18, wave: 'l', headY: -0.05 },
+  // Hands together in front (counting / itemizing).
+  { name: 'count-front', lUAz: -1.10, lUAx: -0.62, rUAz: 1.10, rUAx: -0.62, lLAz: -1.05, rLAz: 1.05 },
+]
+
+/** Pick a random speaking-gesture index different from `current`. */
+export function nextSpeakGesture(current: number): number {
+  if (SPEAK_GESTURES.length <= 1) return 0
+  let n = current
+  while (n === current) n = Math.floor(Math.random() * SPEAK_GESTURES.length)
   return n
 }
