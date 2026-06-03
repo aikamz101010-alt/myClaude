@@ -3,11 +3,12 @@ import { lipSync } from './lipsync'
 import { useAvatarStore } from '@/store/avatarStore'
 
 /**
- * Strip markdown / code / urls down to plain prose suitable for TTS, and cap
- * the length so the avatar gives a concise spoken summary rather than reading
- * an entire essay. Language is left untouched (speaks in Claude's language).
+ * Strip markdown / code / urls down to plain prose suitable for TTS. By default
+ * there is no length cap (maxLen = Infinity) — the whole reply is narrated; the
+ * caller passes a finite cap only if the user chose a shorter narration length.
+ * Language is left untouched (speaks in Claude's language).
  */
-export function sanitizeForSpeech(text: string, maxLen = 600): string {
+export function sanitizeForSpeech(text: string, maxLen = Infinity): string {
   let t = text
   t = t.replace(/```[\s\S]*?```/g, ' code block ')       // fenced code
   t = t.replace(/`[^`]*`/g, ' ')                          // inline code
@@ -56,32 +57,77 @@ function synthEdge(text: string): Promise<string> {
   return invoke<string>('synthesize_edge', { text, voice: EDGE_VOICE[voiceLang], rate: null })
 }
 
-/** Synthesize + play `text` through the avatar (lip-sync driven by the audio). */
-export async function speak(text: string): Promise<void> {
+/** Synthesize one piece of text via the active provider (Edge → local fallback). */
+async function synth(text: string): Promise<string> {
   const { provider } = useAvatarStore.getState()
-  const clean = sanitizeForSpeech(text)
-  if (!clean) return
-  try {
-    let b64: string
-    if (provider === 'edge') {
-      try {
-        b64 = await synthEdge(clean)
-      } catch (e) {
-        // No internet / endpoint down → fall back to the offline voice.
-        console.warn('[avatar] Edge TTS failed, falling back to local:', e)
-        b64 = await synthLocal(clean)
-      }
-    } else {
-      b64 = await synthLocal(clean)
+  if (provider === 'edge') {
+    try {
+      return await synthEdge(text)
+    } catch (e) {
+      console.warn('[avatar] Edge TTS failed, falling back to local:', e)
+      return await synthLocal(text)
     }
-    await lipSync.play(b64, clean)
-  } catch (e) {
-    console.warn('[avatar] TTS failed:', e)
+  }
+  return await synthLocal(text)
+}
+
+/** Split long prose into chunks (≤ max chars) on sentence boundaries — so very
+ * long replies synthesize reliably and play back fully without a hard limit. */
+function chunkText(text: string, max = 480): string[] {
+  if (text.length <= max) return [text]
+  const sentences = text.match(/[^.!?…]+[.!?…]+|\S[^.!?…]*$/g) ?? [text]
+  const chunks: string[] = []
+  let cur = ''
+  for (const s of sentences) {
+    if (cur && (cur + s).length > max) { chunks.push(cur.trim()); cur = '' }
+    cur += s
+    while (cur.length > max) { chunks.push(cur.slice(0, max).trim()); cur = cur.slice(max) }
+  }
+  if (cur.trim()) chunks.push(cur.trim())
+  return chunks.filter(Boolean)
+}
+
+/** Play one synthesized chunk and resolve when it finishes (or is stopped). */
+function playChunk(b64: string, caption: string): Promise<void> {
+  return new Promise<void>(resolve => {
+    let done = false
+    const finish = () => { if (!done) { done = true; lipSync.onEnd = null; resolve() } }
+    lipSync.play(b64, caption).then(() => { lipSync.onEnd = finish }).catch(finish)
+  })
+}
+
+// Cancellation token: a newer speak() supersedes an in-flight one.
+let speakSeq = 0
+
+/** Synthesize + play `text` through the avatar (lip-sync driven by the audio).
+ * Honors the persisted narration-length setting (default: unlimited). Long text
+ * is chunked and played sequentially, with the next chunk pre-synthesized while
+ * the current one plays so there are no gaps. */
+export async function speak(text: string): Promise<void> {
+  const { narrationLimit } = useAvatarStore.getState()
+  const limit = narrationLimit && narrationLimit > 0 ? narrationLimit : Infinity
+  const clean = sanitizeForSpeech(text, limit)
+  if (!clean) return
+
+  const mySeq = ++speakSeq
+  lipSync.stop() // cancel any current narration
+
+  const chunks = chunkText(clean)
+  let nextP: Promise<string> = synth(chunks[0]).catch(() => '')
+  for (let i = 0; i < chunks.length; i++) {
+    if (mySeq !== speakSeq) return
+    const b64 = await nextP
+    // Pre-synthesize the next chunk while this one plays.
+    nextP = i + 1 < chunks.length ? synth(chunks[i + 1]).catch(() => '') : Promise.resolve('')
+    if (mySeq !== speakSeq) return
+    if (!b64) continue
+    await playChunk(b64, chunks[i])
   }
 }
 
 /** Stop any in-progress narration. */
 export function stopSpeaking(): void {
+  speakSeq++          // invalidate any running speak() loop
   lipSync.stop()
 }
 

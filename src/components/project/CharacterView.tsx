@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { VRM, VRMLoaderPlugin, VRMUtils, VRMExpressionPresetName } from '@pixiv/three-vrm'
-import { Volume2, VolumeX, Loader2, Bot, PanelLeft, PanelRight, Settings, X, ScrollText } from 'lucide-react'
+import { Volume2, VolumeX, Loader2, Bot, Settings, X } from 'lucide-react'
 import { useSessionStore } from '@/store/sessionStore'
 import { useAvatarStore } from '@/store/avatarStore'
 import { lipSync } from '@/lib/lipsync'
@@ -20,12 +20,6 @@ interface Props {
 type Status = 'loading' | 'ready' | 'error'
 type Zoom = 'full' | 'three' | 'half' | 'head'
 
-const ZOOMS: { key: Zoom; label: string }[] = [
-  { key: 'full',  label: 'Full'  },
-  { key: 'three', label: '3/4'   },
-  { key: 'half',  label: '1/2'   },
-  { key: 'head',  label: 'Head'  },
-]
 
 // ── Vanilla three.js VRM stage with walking, gestures & zoom framing ──────────
 
@@ -229,41 +223,50 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
           ? Math.sin(((idleGestureUntil - time) / 1.6) * Math.PI)   // 0 → 1 → 0
           : 0
 
-        // ── Arm pose targets (lerped → smooth transitions between modes) ──
-        const gesture = speaking ? 1 : 0
+        // ── Arm pose targets per mode (lerped → smooth transitions) ──
         const armSwing = moving ? Math.sin(legPhase) * 0.25 : 0
-        let lUAz = -1.40 + Math.sin(time * 0.9) * 0.04
-        let lUAx = Math.sin(time * 0.7) * 0.05 + gesture * Math.sin(time * 3.0) * 0.18 - armSwing
-        let rUAz = 1.40 + Math.sin(time * 0.9 + 1.0) * 0.04
-        let rUAx = Math.sin(time * 0.7 + 0.5) * 0.05 + gesture * Math.sin(time * 3.2 + 1) * 0.18 + armSwing
-        let lLAz = -0.20 - gesture * Math.abs(Math.sin(time * 3.0)) * 0.28
-        let rLAz = 0.20 + gesture * Math.abs(Math.sin(time * 3.2 + 1)) * 0.28
-        // Idle gesture raises one hand briefly.
-        if (idleGestureSide === 'r') { rUAx -= idleG * 0.5; rLAz += idleG * 0.5 }
-        else { lUAx -= idleG * 0.5; lLAz -= idleG * 0.5 }
+        let lUAz: number, lUAx: number, rUAz: number, rUAx: number, lLAz: number, rLAz: number
         if (thinking) {
           // Pondering: right hand up toward the chin, left arm relaxed down.
-          rUAz = 0.95
-          rUAx = -0.35 + Math.sin(time * 0.8) * 0.03
-          rLAz = 1.45
+          rUAz = 0.95; rUAx = -0.35 + Math.sin(time * 0.8) * 0.03; rLAz = 1.45
           lUAz = -1.32; lUAx = 0; lLAz = -0.25
+        } else if (speaking) {
+          // Talking: arms come forward off the body and clearly gesticulate.
+          lUAz = -1.02 + Math.sin(time * 2.6) * 0.20
+          lUAx = -0.32 + Math.sin(time * 3.0) * 0.38
+          rUAz = 1.02 + Math.sin(time * 2.6 + 1.2) * 0.20
+          rUAx = -0.32 + Math.sin(time * 3.2 + 0.6) * 0.38
+          lLAz = -0.60 - Math.abs(Math.sin(time * 2.6)) * 0.55
+          rLAz = 0.60 + Math.abs(Math.sin(time * 3.2 + 0.6)) * 0.55
+        } else {
+          // Idle: arms down with a subtle sway + walk swing + occasional gesture.
+          lUAz = -1.40 + Math.sin(time * 0.9) * 0.04
+          lUAx = Math.sin(time * 0.7) * 0.05 - armSwing
+          rUAz = 1.40 + Math.sin(time * 0.9 + 1.0) * 0.04
+          rUAx = Math.sin(time * 0.7 + 0.5) * 0.05 + armSwing
+          lLAz = -0.20; rLAz = 0.20
+          if (idleGestureSide === 'r') { rUAx -= idleG * 0.6; rLAz += idleG * 0.6 }
+          else { lUAx -= idleG * 0.6; lLAz -= idleG * 0.6 }
         }
-        lerpRot(lUA, 'z', lUAz); lerpRot(lUA, 'x', lUAx)
-        lerpRot(rUA, 'z', rUAz); lerpRot(rUA, 'x', rUAx)
-        lerpRot(lLA, 'z', lLAz); lerpRot(rLA, 'z', rLAz)
+        // Faster lerp while speaking so the gesticulation is clearly visible.
+        const armK = speaking ? 0.32 : 0.18
+        lerpRot(lUA, 'z', lUAz, armK); lerpRot(lUA, 'x', lUAx, armK)
+        lerpRot(rUA, 'z', rUAz, armK); lerpRot(rUA, 'x', rUAx, armK)
+        lerpRot(lLA, 'z', lLAz, armK); lerpRot(rLA, 'z', rLAz, armK)
 
-        // Subtle hand/wrist motion so the hands are never frozen.
+        // Hands/wrists: subtle idle motion + clear flicks while speaking.
         const hw = interactive ? 1 : 0
+        const speakHand = speaking ? Math.sin(time * 5) * 0.22 : 0
         const lHand = bone('leftHand'); const rHand = bone('rightHand')
-        if (lHand) lHand.rotation.z = Math.sin(time * 1.7) * 0.06 * hw - (idleGestureSide === 'l' ? idleG * 0.2 : 0)
-        if (rHand) rHand.rotation.z = Math.sin(time * 1.9 + 1) * 0.06 * hw + (idleGestureSide === 'r' ? idleG * 0.2 : 0)
+        if (lHand) lHand.rotation.z = Math.sin(time * 1.7) * 0.06 * hw + speakHand - (idleGestureSide === 'l' ? idleG * 0.25 : 0)
+        if (rHand) rHand.rotation.z = Math.sin(time * 1.9 + 1) * 0.06 * hw - speakHand + (idleGestureSide === 'r' ? idleG * 0.25 : 0)
 
         // ── Body: weight shift + breathing ──
         const hips = bone('hips'); const spine = bone('spine')
         const chest = bone('upperChest') ?? bone('chest')
         const sway = Math.sin(time * 0.31) + 0.4 * Math.sin(time * 0.73)
         if (hips) hips.rotation.z = sway * 0.02
-        if (spine) spine.rotation.y = Math.sin(time * 0.4) * 0.03 + gesture * Math.sin(time * 1.1) * 0.05
+        if (spine) spine.rotation.y = Math.sin(time * 0.4) * 0.03 + (speaking ? Math.sin(time * 1.1) * 0.06 : 0)
         if (chest) chest.rotation.x = Math.sin(time * 1.3) * 0.016
 
         // ── Head: thinking gaze (up & aside) / nods when speaking / idle look ──
@@ -321,18 +324,29 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
 // ── Subtitle: reveal words in sync with TTS playback progress ─────────────────
 
 function Subtitle({ side }: { side: 'left' | 'right' }) {
+  const hideSec = useAvatarStore(s => s.captionHideSec)
   const [shown, setShown] = useState('')
+  const endedAtRef = useRef(0)
 
   useEffect(() => {
     const id = setInterval(() => {
       const cap = lipSync.caption
-      if (!cap) { setShown(''); return }
+      if (!cap) { setShown(''); endedAtRef.current = 0; return }
       const words = cap.split(' ')
       const n = Math.max(1, Math.ceil(lipSync.progress() * words.length))
-      setShown(words.slice(0, n).join(' '))
-    }, 70)
+      const full = words.slice(0, n).join(' ')
+      if (lipSync.speaking) {
+        endedAtRef.current = 0
+        setShown(full)
+      } else {
+        // Speech finished but caption still set → optionally auto-hide after a delay.
+        if (endedAtRef.current === 0) endedAtRef.current = Date.now()
+        const expired = hideSec > 0 && Date.now() - endedAtRef.current > hideSec * 1000
+        setShown(expired ? '' : full)
+      }
+    }, 80)
     return () => clearInterval(id)
-  }, [])
+  }, [hideSec])
 
   if (!shown) return null
 
@@ -417,11 +431,8 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
   const setAutoSpeak = useAvatarStore(s => s.setAutoSpeak)
   // Persisted Character-panel view settings.
   const zoom = useAvatarStore(s => s.zoom)
-  const setZoom = useAvatarStore(s => s.setZoom)
   const side = useAvatarStore(s => s.subtitleSide)
-  const setSide = useAvatarStore(s => s.setSubtitleSide)
   const showLog = useAvatarStore(s => s.showLog)
-  const setShowLog = useAvatarStore(s => s.setShowLog)
   const interactive = useAvatarStore(s => s.interactive)
   const [status, setStatus] = useState<Status>('loading')
   const [showSettings, setShowSettings] = useState(false)
@@ -473,30 +484,8 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
             </div>
           )}
 
-          {/* Top-left: zoom presets */}
-          <div className="absolute top-3 left-3 z-10 flex items-center gap-0.5 rounded-xl bg-surface/80 backdrop-blur border border-white/10 p-0.5">
-            {ZOOMS.map(z => (
-              <button key={z.key} onClick={() => setZoom(z.key)}
-                className={cn('px-2.5 py-1 rounded-lg text-xs font-mono cursor-pointer transition-colors',
-                  zoom === z.key ? 'bg-accent text-bg' : 'text-muted hover:text-text')}>
-                {z.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Top-right: transcript toggle + subtitle side + mute + settings */}
+          {/* Top-right: mute + settings */}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-1">
-            <button onClick={() => setShowLog(!showLog)}
-              title={showLog ? 'Sembunyikan log percakapan' : 'Tampilkan log percakapan'}
-              className={cn('p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 cursor-pointer transition-colors',
-                showLog ? 'text-accent' : 'text-muted hover:text-text')}>
-              <ScrollText className="w-4 h-4" />
-            </button>
-            <button onClick={() => setSide(side === 'left' ? 'right' : 'left')}
-              title={`Subtitle di ${side === 'left' ? 'kiri' : 'kanan'} — klik untuk pindah`}
-              className="p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 text-muted hover:text-text cursor-pointer transition-colors">
-              {side === 'left' ? <PanelLeft className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}
-            </button>
             <button onClick={() => { if (autoSpeak) stopSpeaking(); setAutoSpeak(!autoSpeak) }}
               title={autoSpeak ? 'Matikan suara' : 'Aktifkan suara'}
               className={cn('p-1.5 rounded-lg bg-surface/80 backdrop-blur border border-white/10 cursor-pointer transition-colors',

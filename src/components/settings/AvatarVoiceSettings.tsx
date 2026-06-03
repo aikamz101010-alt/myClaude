@@ -17,11 +17,15 @@ export function AvatarVoiceSettings() {
   const setAutoSpeak = useAvatarStore(s => s.setAutoSpeak)
   const rate = useAvatarStore(s => s.rate)
   const setRate = useAvatarStore(s => s.setRate)
+  const narrationLimit = useAvatarStore(s => s.narrationLimit)
+  const setNarrationLimit = useAvatarStore(s => s.setNarrationLimit)
   // Character view / position (persisted)
   const zoom = useAvatarStore(s => s.zoom)
   const setZoom = useAvatarStore(s => s.setZoom)
   const subtitleSide = useAvatarStore(s => s.subtitleSide)
   const setSubtitleSide = useAvatarStore(s => s.setSubtitleSide)
+  const captionHideSec = useAvatarStore(s => s.captionHideSec)
+  const setCaptionHideSec = useAvatarStore(s => s.setCaptionHideSec)
   const showLog = useAvatarStore(s => s.showLog)
   const setShowLog = useAvatarStore(s => s.setShowLog)
   const interactive = useAvatarStore(s => s.interactive)
@@ -123,6 +127,25 @@ export function AvatarVoiceSettings() {
           className="w-full accent-accent cursor-pointer" />
       </div>
 
+      {/* Narration length */}
+      <div>
+        <p className="text-[11px] text-text mb-1.5">Panjang narasi</p>
+        <div className="flex gap-1">
+          {([[0, 'Penuh'], [1500, 'Sedang'], [600, 'Ringkas']] as [number, string][]).map(([v, l]) => (
+            <button key={v} onClick={() => setNarrationLimit(v)}
+              className={cn('flex-1 px-2 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors border',
+                narrationLimit === v ? 'bg-accent/15 text-accent border-accent/40' : 'text-muted hover:text-text border-white/10')}>
+              {l}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-muted/60 mt-1">
+          {narrationLimit === 0
+            ? 'Membacakan seluruh balasan tanpa batas (default)'
+            : `Dibatasi ~${narrationLimit} karakter lalu berhenti`}
+        </p>
+      </div>
+
       {/* Voice locked info */}
       <p className="text-[10px] text-muted/60">
         Suara dikunci ke <span className="text-text">perempuan (Bahasa Indonesia)</span>.
@@ -158,6 +181,25 @@ export function AvatarVoiceSettings() {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Auto-hide subtitle */}
+        <div>
+          <p className="text-[10px] text-muted/60 mb-1">Sembunyikan subtitle otomatis</p>
+          <div className="flex gap-1">
+            {([[0, 'Selalu'], [60, '1m'], [180, '3m'], [300, '5m']] as [number, string][]).map(([v, l]) => (
+              <button key={v} onClick={() => setCaptionHideSec(v)}
+                className={cn('flex-1 px-1.5 py-1 rounded-lg text-[11px] font-mono cursor-pointer transition-colors border',
+                  captionHideSec === v ? 'bg-accent/15 text-accent border-accent/40' : 'text-muted hover:text-text border-white/10')}>
+                {l}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-muted/60 mt-1">
+            {captionHideSec === 0
+              ? 'Subtitle tetap sampai balasan berikutnya'
+              : `Hilang ${captionHideSec / 60} menit setelah selesai bicara`}
+          </p>
         </div>
 
         {/* Show transcript */}

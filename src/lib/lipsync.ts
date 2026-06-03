@@ -102,6 +102,10 @@ class LipSync {
     this.caption = ''
     this.ended = false
     this.lastP = 0
+    // Resolve any chunk waiter so sequential narration can be cancelled cleanly.
+    const cb = this.onEnd
+    this.onEnd = null
+    if (cb) cb()
   }
 
   /** Current mouth openness (0..1), smoothed for natural movement. */

@@ -23,6 +23,8 @@ interface AvatarStore {
   subtitleSide: 'left' | 'right' // subtitle box side
   showLog: boolean          // conversation transcript visible
   interactive: boolean      // lively idle eyes + hands
+  narrationLimit: number    // max characters to narrate; 0 = unlimited (default)
+  captionHideSec: number    // auto-hide subtitle this many seconds after speech ends; 0 = keep until next reply
 
   setEnabled: (v: boolean) => void
   toggleEnabled: () => void
@@ -38,6 +40,8 @@ interface AvatarStore {
   setSubtitleSide: (s: 'left' | 'right') => void
   setShowLog: (v: boolean) => void
   setInteractive: (v: boolean) => void
+  setNarrationLimit: (n: number) => void
+  setCaptionHideSec: (n: number) => void
 }
 
 export const DEFAULT_VRM_URL = '/avatar/character.vrm'
@@ -59,6 +63,8 @@ export const useAvatarStore = create<AvatarStore>()(
       subtitleSide: 'left',
       showLog: true,
       interactive: true,
+      narrationLimit: 0, // unlimited by default — narrate the whole reply
+      captionHideSec: 0, // keep subtitle until the next reply by default
 
       setEnabled: v => set({ enabled: v }),
       toggleEnabled: () => set(s => ({ enabled: !s.enabled })),
@@ -74,6 +80,8 @@ export const useAvatarStore = create<AvatarStore>()(
       setSubtitleSide: s => set({ subtitleSide: s }),
       setShowLog: v => set({ showLog: v }),
       setInteractive: v => set({ interactive: v }),
+      setNarrationLimit: n => set({ narrationLimit: n }),
+      setCaptionHideSec: n => set({ captionHideSec: n }),
     }),
     { name: 'claudex-avatar' },
   ),
