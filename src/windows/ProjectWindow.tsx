@@ -13,7 +13,7 @@ import { useLibraryStore } from '@/store/libraryStore'
 import { useAvatarStore } from '@/store/avatarStore'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
 import { cn } from '@/lib/utils'
-import { MessageSquare, Terminal, FileText, ArrowLeft, Circle, Plus, X, Folder, PersonStanding } from 'lucide-react'
+import { MessageSquare, Terminal, FileText, ArrowLeft, Circle, Plus, X, Folder, PersonStanding, PanelRight } from 'lucide-react'
 import type { Project } from '@/store/projectStore'
 import type { SkillItem } from '@/store/libraryStore'
 
@@ -31,6 +31,7 @@ export function ProjectWindow({ project, onBack }: Props) {
   const [showAddURL, setShowAddURL] = useState(false)
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
   const [showFolder, setShowFolder] = useState(false)  // folder tree collapsed by default
+  const [showRightPanel, setShowRightPanel] = useState(true)  // right Contract panel (chat tab)
   const [charOpened, setCharOpened] = useState(false)  // mount Character panel once, then keep it
   const [openFiles, setOpenFiles] = useState<string[]>([])
   const [activeFile, setActiveFile] = useState<string | null>(null)
@@ -150,6 +151,14 @@ export function ProjectWindow({ project, onBack }: Props) {
                 </button>
               ))}
             </div>
+            {tab === 'chat' && (
+              <button onClick={() => setShowRightPanel(v => !v)}
+                title={showRightPanel ? 'Hide contract panel' : 'Show contract panel'}
+                className={cn('p-1 rounded-lg cursor-pointer transition-colors',
+                  showRightPanel ? 'text-accent' : 'text-muted hover:text-text')}>
+                <PanelRight className="w-3.5 h-3.5" />
+              </button>
+            )}
             <div className="w-px h-4 bg-white/10" />
             <ThemeToggle />
           </div>
@@ -258,7 +267,7 @@ export function ProjectWindow({ project, onBack }: Props) {
           </div>
 
           {tab === 'chat'
-            ? <ContractPanel contractPath={project.contract_path} activeChatId={activeChatId} />
+            ? (showRightPanel && <ContractPanel contractPath={project.contract_path} activeChatId={activeChatId} />)
             : tab === 'character'
               ? null
               : <LibraryPanel onAddFromURL={() => setShowAddURL(true)} onItemClick={tab === 'contract' ? handleAddToContract : undefined} />}
