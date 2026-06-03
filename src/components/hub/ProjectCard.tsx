@@ -5,6 +5,9 @@ import type { Project } from '@/store/projectStore'
 interface Props {
   project: Project
   agentCount: number
+  tokensIn?: number
+  tokensOut?: number
+  totalCost?: number
   onOpen: () => void
   onDelete: () => void
 }
@@ -21,7 +24,15 @@ function formatRelativeTime(unixSecs: number): string {
   })
 }
 
-export function ProjectCard({ project, agentCount, onOpen, onDelete }: Props) {
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+export function ProjectCard({ project, agentCount, tokensIn = 0, tokensOut = 0, totalCost = 0, onOpen, onDelete }: Props) {
+  const hasUsage = tokensIn > 0 || tokensOut > 0 || totalCost > 0
+
   return (
     <div
       onClick={onOpen}
@@ -63,16 +74,28 @@ export function ProjectCard({ project, agentCount, onOpen, onDelete }: Props) {
       {/* Path */}
       <p className="text-xs text-muted font-mono truncate leading-tight">{project.path}</p>
 
-      {/* Meta */}
-      <div className="flex items-center gap-2 text-xs font-mono text-muted">
-        <Clock className="w-3 h-3 flex-shrink-0" />
-        <span>{formatRelativeTime(project.last_opened)}</span>
-        {agentCount > 0 && (
-          <>
-            <span className="text-muted/40">·</span>
-            <Zap className="w-3 h-3 text-accent flex-shrink-0" />
-            <span className="text-accent font-semibold">{agentCount} active</span>
-          </>
+      {/* Meta row: last-opened (left)  ·  cumulative token + USD (right) */}
+      <div className="flex items-center justify-between gap-2 text-xs font-mono text-muted">
+        {/* Left: last opened + active */}
+        <div className="flex items-center gap-2 min-w-0">
+          <Clock className="w-3 h-3 flex-shrink-0" />
+          <span className="truncate">{formatRelativeTime(project.last_opened)}</span>
+          {agentCount > 0 && (
+            <>
+              <span className="text-muted/40">·</span>
+              <Zap className="w-3 h-3 text-accent flex-shrink-0" />
+              <span className="text-accent font-semibold">{agentCount}</span>
+            </>
+          )}
+        </div>
+
+        {/* Right: cumulative usage — tokens in (↑) / out (↓) + est. USD */}
+        {hasUsage && (
+          <div className="flex items-center gap-2 flex-shrink-0" title="Cumulative usage for this project — ↑input ↓output tokens · est. USD">
+            <span className="text-muted/70">↑{fmtTokens(tokensIn)}</span>
+            <span className="text-muted/70">↓{fmtTokens(tokensOut)}</span>
+            <span className="text-muted/50">${totalCost.toFixed(2)}</span>
+          </div>
         )}
       </div>
     </div>

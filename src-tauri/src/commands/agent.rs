@@ -127,8 +127,8 @@ fn run_chat(
             // Surface the result text (e.g. "Invalid API key · Fix external API key")
             let err = if !content.is_empty() {
                 content
-            } else if api_status.is_some() {
-                format!("API error {}", api_status.unwrap())
+            } else if let Some(status) = api_status {
+                format!("API error {}", status)
             } else if !stderr.trim().is_empty() {
                 stderr.trim().to_string()
             } else {

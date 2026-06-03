@@ -134,15 +134,26 @@ export function ContractPanel({ contractPath, activeChatId }: Props) {
     setLoading(false)
   }
 
-  const isWorking = (item: SkillItem) =>
-    workingText.length > 0 && workingText.includes(item.name.toLowerCase())
+  // Running subagent names from SDK SubagentStart/Stop hooks
+  const activeAgentSet = useMemo(() => {
+    const s = new Set<string>()
+    for (const a of activeChat?.activeAgents ?? []) s.add(a.toLowerCase())
+    return s
+  }, [activeChat?.activeAgents])
+
+  const isWorking = (item: SkillItem) => {
+    const name = item.name.toLowerCase()
+    // 1) running subagent (Task tool → SubagentStart hook), or
+    // 2) name referenced by an in-progress tool/skill call
+    return activeAgentSet.has(name) || (workingText.length > 0 && workingText.includes(name))
+  }
   const lastRun = (item: SkillItem) => lastRunMap[item.name.toLowerCase()]
 
   // Main Claude agent state
   const mainModel = activeChat?.model
     ? activeChat.model.replace('claude-', '').replace(/-\d{8}$/, '')
     : 'default'
-  const lastAssistant = activeChat?.messages.filter(m => m.role === 'assistant').pop()
+  const lastAssistant = activeChat?.messages?.filter(m => m.role === 'assistant').pop()
 
   // ── helpers ──
   const setForType = (t: Tab): Set<string> => (t === 'plugin' ? contract.mcp : contract[t as 'skill' | 'agent'])
@@ -303,7 +314,32 @@ export function ContractPanel({ contractPath, activeChatId }: Props) {
           <>
             {/* Main agent (orchestrator) always on top */}
             {mainAgentCard}
-            {totalInContract === 0 ? (
+
+            {/* Running subagents (from SDK hooks) — shown even if not in the contract */}
+            {(activeChat?.activeAgents?.length ?? 0) > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 px-1 mb-1">
+                  <Loader2 className="w-3 h-3 animate-spin" style={{ color: TAG_COLORS.agent }} />
+                  <span className="text-xs font-mono font-semibold uppercase tracking-wider" style={{ color: TAG_COLORS.agent }}>
+                    Running now
+                  </span>
+                  <span className="text-xs font-mono text-muted/40">({activeChat!.activeAgents.length})</span>
+                </div>
+                <div className="space-y-0.5">
+                  {activeChat!.activeAgents.map(name => (
+                    <div key={name}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded-lg ring-1"
+                      style={{ backgroundColor: `${TAG_COLORS.agent}1a`, boxShadow: `inset 0 0 0 1px ${TAG_COLORS.agent}55` }}>
+                      <Loader2 className="w-3.5 h-3.5 flex-shrink-0 animate-spin" style={{ color: TAG_COLORS.agent }} />
+                      <span className="text-xs font-mono font-semibold truncate" style={{ color: TAG_COLORS.agent }}>{name}</span>
+                      <span className="text-xs font-mono ml-auto flex-shrink-0" style={{ color: TAG_COLORS.agent }}>running…</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {totalInContract === 0 && (activeChat?.activeAgents?.length ?? 0) === 0 ? (
               <div className="flex flex-col items-center justify-center h-24 gap-2 text-center px-3">
                 <p className="text-xs text-muted font-mono">No active items</p>
                 <p className="text-xs text-muted/50 font-mono">Add skills/agents/plugins in the Contract tab</p>

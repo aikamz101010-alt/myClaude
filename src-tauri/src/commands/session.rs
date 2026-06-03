@@ -166,13 +166,13 @@ fn summarise_tool_input(input: &Value) -> String {
     for field in &["command", "file_path", "path", "query", "content", "description"] {
         if let Some(v) = input[field].as_str() {
             let s: String = v.chars().take(80).collect();
-            return if v.len() > 80 { format!("{}…", s) } else { s };
+            return if v.chars().count() > 80 { format!("{}…", s) } else { s };
         }
     }
     // Fallback: compact JSON
     let s = serde_json::to_string(input).unwrap_or_default();
     let short: String = s.chars().take(80).collect();
-    if s.len() > 80 { format!("{}…", short) } else { short }
+    if s.chars().count() > 80 { format!("{}…", short) } else { short }
 }
 
 // ── Tauri commands ────────────────────────────────────────────────

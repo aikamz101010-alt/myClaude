@@ -43,7 +43,8 @@ async function handlePrompt(cmd) {
   // canUseTool → ask the UI (unless bypassPermissions handled by SDK)
   const canUseTool = async (toolName, input) => {
     const requestId = nextReqId()
-    emit({ chatId, kind: 'permission_request', requestId, tool: toolName, input })
+    // Send a STRING summary (raw object would crash the UI when rendered)
+    emit({ chatId, kind: 'permission_request', requestId, tool: toolName, input: summariseInput(input) })
     return await new Promise(resolve => {
       pendingPerms.set(requestId, (allow, msg) => {
         if (allow) {

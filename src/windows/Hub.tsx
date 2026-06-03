@@ -4,11 +4,11 @@ import { ProjectCard } from '@/components/hub/ProjectCard'
 import { GlobalMonitor } from '@/components/hub/GlobalMonitor'
 import { useProjectStore } from '@/store/projectStore'
 import { useLibraryStore } from '@/store/libraryStore'
-import { useAgentStore } from '@/store/agentStore'
 import { useSessionStore } from '@/store/sessionStore'
 import { cn } from '@/lib/utils'
-import { Plus, RefreshCw, Cpu, Terminal, FolderOpen, FolderInput, X, Settings, CheckCircle, AlertTriangle, Search } from 'lucide-react'
+import { Plus, RefreshCw, Cpu, Terminal, FolderOpen, FolderInput, X, Settings, CheckCircle, AlertTriangle, Search, Globe, LogIn, LogOut, KeyRound } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import type { Project } from '@/store/projectStore'
 import type { SkillItem } from '@/store/libraryStore'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
@@ -197,13 +197,11 @@ const PROFILE_PRESETS = [
 ]
 
 function SettingsModal({ onClose }: { onClose: () => void }) {
-  const { authStatus, claudeBinary: claudeBinaryForDisplay, load: reloadLibrary } = useLibraryStore()
-  const isAuthOk = authStatus.startsWith('✅')
+  const { claudeBinary: claudeBinaryForDisplay, load: reloadLibrary } = useLibraryStore()
 
-  // Auth location state
+  // API-key save location
   const [editingLocation, setEditingLocation] = useState(false)
   const [profilePath, setProfilePath] = useState('~/.bash_profile')
-  const [showPresets, setShowPresets] = useState(false)
 
   // API key state
   const [apiKey, setApiKey] = useState('')
@@ -212,9 +210,60 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [feedback, setFeedback] = useState('')
   const [reloading, setReloading] = useState(false)
 
+  // Auth method tabs + browser-login state
+  const [method, setMethod] = useState<'browser' | 'apikey'>('browser')
+  const [authInfo, setAuthInfo] = useState<{ loggedIn?: boolean; email?: string; subscriptionType?: string; authMethod?: string } | null>(null)
+  const [loggingIn, setLoggingIn] = useState(false)
+  const [loginLog, setLoginLog] = useState<string[]>([])
+
   const setFeedbackTemp = (msg: string) => {
     setFeedback(msg)
     setTimeout(() => setFeedback(''), 3000)
+  }
+
+  // Load rich auth status (claude auth status --json)
+  const loadAuthInfo = async () => {
+    try {
+      const raw = await invoke<string>('auth_status_json')
+      setAuthInfo(JSON.parse(raw))
+    } catch { setAuthInfo(null) }
+  }
+  useEffect(() => { loadAuthInfo() }, [])
+
+  // Browser OAuth login — subscribe to streamed events
+  const handleBrowserLogin = async (mode: 'claudeai' | 'console') => {
+    setLoggingIn(true)
+    setLoginLog([])
+    const unlistenEvt = await listen<string>('auth:event', e => {
+      setLoginLog(prev => [...prev, e.payload].slice(-8))
+    })
+    const unlistenDone = await listen<{ success: boolean; error?: string }>('auth:done', async e => {
+      unlistenEvt(); unlistenDone()
+      setLoggingIn(false)
+      if (e.payload.success) {
+        setFeedbackTemp('✅ Signed in via browser')
+        await loadAuthInfo()
+        await reloadLibrary()
+      } else {
+        setFeedbackTemp(`❌ Login failed${e.payload.error ? ': ' + e.payload.error : ''}`)
+      }
+    })
+    try {
+      await invoke('auth_login', { mode })
+    } catch (err) {
+      unlistenEvt(); unlistenDone()
+      setLoggingIn(false)
+      setFeedbackTemp(`❌ ${String(err)}`)
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      await invoke('auth_logout')
+      setFeedbackTemp('Logged out')
+      await loadAuthInfo()
+      await reloadLibrary()
+    } catch (e) { setFeedbackTemp(`❌ ${String(e)}`) }
   }
 
   // Save API key → set in runtime + append to profile file
@@ -274,85 +323,104 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
         <div className="mb-4 p-3 rounded-xl bg-surface2/50 border border-white/5">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-mono font-semibold text-muted">Authentication</p>
-            <button
-              onClick={handleReload}
-              className="flex items-center gap-1 text-xs font-mono text-muted hover:text-accent cursor-pointer transition-colors"
-            >
-              <RefreshCw className={cn('w-3 h-3', reloading && 'animate-spin')} />
-              Re-check
-            </button>
+            <div className="flex items-center gap-2">
+              {authInfo?.loggedIn && (
+                <button onClick={handleLogout}
+                  className="flex items-center gap-1 text-xs font-mono text-muted hover:text-error cursor-pointer transition-colors">
+                  <LogOut className="w-3 h-3" /> Logout
+                </button>
+              )}
+              <button onClick={() => { handleReload(); loadAuthInfo() }}
+                className="flex items-center gap-1 text-xs font-mono text-muted hover:text-accent cursor-pointer transition-colors">
+                <RefreshCw className={cn('w-3 h-3', reloading && 'animate-spin')} /> Re-check
+              </button>
+            </div>
           </div>
           <div className="flex items-center gap-2">
-            {isAuthOk
+            {authInfo?.loggedIn
               ? <CheckCircle className="w-4 h-4 text-accent flex-shrink-0" />
               : <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0" />}
-            <p className={cn('text-xs font-mono', isAuthOk ? 'text-accent' : 'text-warning')}>
-              {authStatus || 'Checking...'}
-            </p>
-          </div>
-        </div>
-
-        {/* ── Auth Location ───────────────────────── */}
-        <div className="mb-4 p-3 rounded-xl bg-surface2/50 border border-white/5">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-mono font-semibold text-muted">Auth Location</p>
-            <button
-              onClick={() => { setEditingLocation(e => !e); setShowPresets(false) }}
-              className="flex items-center gap-1 text-xs font-mono text-accent hover:text-accent/80 cursor-pointer transition-colors"
-            >
-              {editingLocation ? 'Done' : 'Edit'}
-            </button>
-          </div>
-
-          {!editingLocation ? (
-            <p className="text-xs font-mono text-text">{profilePath}</p>
-          ) : (
-            <div className="space-y-2">
-              <div className="flex gap-2">
-                <input
-                  value={profilePath}
-                  onChange={e => setProfilePath(e.target.value)}
-                  placeholder="~/.bash_profile"
-                  className="flex-1 bg-surface2 rounded-lg px-3 py-2 text-xs font-mono text-text placeholder-muted focus:outline-none focus:ring-1 focus:ring-accent/50"
-                  autoFocus
-                />
-                <button
-                  onClick={() => setShowPresets(p => !p)}
-                  className="px-2 py-1.5 bg-surface rounded-lg text-xs font-mono text-muted hover:text-text cursor-pointer border border-white/10 transition-colors"
-                >
-                  Presets
-                </button>
-              </div>
-
-              {showPresets && (
-                <div className="bg-surface rounded-xl border border-white/10 overflow-hidden">
-                  {PROFILE_PRESETS.map(p => (
-                    <button
-                      key={p}
-                      onClick={() => { setProfilePath(p); setShowPresets(false) }}
-                      className={cn(
-                        'w-full text-left px-3 py-2 text-xs font-mono cursor-pointer transition-colors',
-                        profilePath === p ? 'bg-accent/10 text-accent' : 'text-muted hover:bg-surface2/50 hover:text-text'
-                      )}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
+            <div className="min-w-0">
+              {authInfo?.loggedIn ? (
+                <p className="text-xs font-mono text-accent truncate">
+                  {authInfo.email ?? 'Signed in'}
+                  {authInfo.subscriptionType && <span className="text-accent/60"> · {authInfo.subscriptionType}</span>}
+                  {authInfo.authMethod && <span className="text-muted/50"> · {authInfo.authMethod}</span>}
+                </p>
+              ) : (
+                <p className="text-xs font-mono text-warning">Not signed in — choose a method below</p>
               )}
-
-              <p className="text-xs text-muted/70 font-mono">
-                App reads <span className="text-text">ANTHROPIC_API_KEY</span> from this file on startup
-              </p>
             </div>
-          )}
+          </div>
         </div>
+
+        {/* ── Method tabs ─────────────────────────── */}
+        <div className="flex items-center gap-1 mb-3 bg-surface2/50 rounded-xl p-1">
+          <button onClick={() => setMethod('browser')}
+            className={cn('flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors',
+              method === 'browser' ? 'bg-surface text-text' : 'text-muted hover:text-text')}>
+            <Globe className="w-3.5 h-3.5" /> Browser login
+          </button>
+          <button onClick={() => setMethod('apikey')}
+            className={cn('flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors',
+              method === 'apikey' ? 'bg-surface text-text' : 'text-muted hover:text-text')}>
+            <KeyRound className="w-3.5 h-3.5" /> API key
+          </button>
+        </div>
+
+        {/* ── Browser login ───────────────────────── */}
+        {method === 'browser' && (
+          <div className="mb-4 p-3 rounded-xl bg-surface2/50 border border-white/5">
+            <p className="text-xs font-mono text-muted/70 mb-2">
+              Sign in via your browser — opens Claude's login page. One-time per machine.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => handleBrowserLogin('claudeai')} disabled={loggingIn}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-mono font-semibold bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed glow-accent">
+                {loggingIn ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
+                Claude subscription
+              </button>
+              <button onClick={() => handleBrowserLogin('console')} disabled={loggingIn}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-mono font-semibold bg-surface2 text-text hover:bg-surface border border-white/10 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                <LogIn className="w-3.5 h-3.5" /> API billing
+              </button>
+            </div>
+            {loginLog.length > 0 && (
+              <pre className="mt-2 max-h-28 overflow-y-auto bg-surface rounded-lg p-2 text-xs font-mono text-muted/80 whitespace-pre-wrap break-all">
+                {loginLog.join('\n')}
+              </pre>
+            )}
+            {loggingIn && (
+              <p className="text-xs font-mono text-muted/60 mt-2">Complete the login in your browser, then come back…</p>
+            )}
+          </div>
+        )}
 
         {/* ── API Key Entry ───────────────────────── */}
+        {method === 'apikey' && (
         <div className="mb-4 p-3 rounded-xl bg-surface2/50 border border-white/5">
-          <p className="text-xs font-mono font-semibold text-muted mb-2">
-            {isAuthOk ? 'Update API Key' : 'Set API Key'}
-          </p>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-mono font-semibold text-muted">API Key</p>
+            <button onClick={() => setEditingLocation(e => !e)}
+              className="text-xs font-mono text-accent hover:text-accent/80 cursor-pointer">
+              {editingLocation ? 'Done' : `Save to: ${profilePath}`}
+            </button>
+          </div>
+          {editingLocation && (
+            <div className="space-y-2 mb-2">
+              <input value={profilePath} onChange={e => setProfilePath(e.target.value)} placeholder="~/.bash_profile"
+                className="w-full bg-surface2 rounded-lg px-3 py-2 text-xs font-mono text-text placeholder-muted focus:outline-none focus:ring-1 focus:ring-accent/50" autoFocus />
+              <div className="flex flex-wrap gap-1">
+                {PROFILE_PRESETS.map(p => (
+                  <button key={p} onClick={() => setProfilePath(p)}
+                    className={cn('px-2 py-1 rounded text-xs font-mono cursor-pointer transition-colors',
+                      profilePath === p ? 'bg-accent/10 text-accent' : 'text-muted hover:bg-surface2/50 hover:text-text')}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex gap-2 mb-2">
             <input
               value={apiKey}
@@ -361,26 +429,23 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               placeholder="sk-ant-api03-..."
               className="flex-1 bg-surface2 rounded-xl px-3 py-2.5 text-sm font-mono text-text placeholder-muted focus:outline-none focus:ring-1 focus:ring-accent/50"
             />
-            <button
-              onClick={() => setShowKey(s => !s)}
-              className="px-3 py-2 rounded-lg text-xs font-mono text-muted hover:text-text cursor-pointer bg-surface2 border border-white/10 transition-colors flex-shrink-0"
-            >
+            <button onClick={() => setShowKey(s => !s)}
+              className="px-3 py-2 rounded-lg text-xs font-mono text-muted hover:text-text cursor-pointer bg-surface2 border border-white/10 transition-colors flex-shrink-0">
               {showKey ? 'Hide' : 'Show'}
             </button>
           </div>
-          <button
-            onClick={handleSaveKey}
-            disabled={!apiKey.trim() || saving}
-            className="w-full py-2.5 rounded-xl text-xs font-mono font-semibold bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed glow-accent"
-          >
-            {saving ? 'Saving...' : `Save to ${profilePath}`}
+          <button onClick={handleSaveKey} disabled={!apiKey.trim() || saving}
+            className="w-full py-2.5 rounded-xl text-xs font-mono font-semibold bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed glow-accent">
+            {saving ? 'Saving...' : 'Save API Key'}
           </button>
-          {feedback && (
-            <p className="text-xs font-mono mt-2 text-center" style={{ color: feedback.startsWith('✅') ? '#22C55E' : '#EF4444' }}>
-              {feedback}
-            </p>
-          )}
         </div>
+        )}
+
+        {feedback && (
+          <p className="text-xs font-mono mb-3 text-center" style={{ color: feedback.startsWith('✅') ? '#22C55E' : feedback.startsWith('❌') ? '#EF4444' : '#94A3B8' }}>
+            {feedback}
+          </p>
+        )}
 
         {/* ── Claude CLI Binary ───────────────────── */}
         <div className="p-3 rounded-xl bg-surface2/30 border border-white/5">
@@ -598,15 +663,7 @@ interface HubProps {
 export function Hub({ onOpenProject }: HubProps) {
   const { projects, load: loadProjects, create, touch, remove } = useProjectStore()
   const { claudeBinary, authStatus, load: loadLibrary, rescan } = useLibraryStore()
-  const { statuses } = useAgentStore()
   const { chatsByProject, chats, ptyStatus } = useSessionStore()
-
-  // A project is "active" if it has a PTY session running OR any chat with messages
-  const isProjectActive = (projectId: string) => {
-    if (ptyStatus[projectId] === 'running') return true
-    const ids = chatsByProject[projectId] ?? []
-    return ids.some(id => (chats[id]?.messages.length ?? 0) > 0)
-  }
 
   const [scanning, setScanning] = useState(false)
   const [modal, setModal] = useState<'new' | 'open' | null>(null)
@@ -643,18 +700,38 @@ export function Hub({ onOpenProject }: HubProps) {
     return (b.created_at ?? 0) - (a.created_at ?? 0) // added (default)
   })
 
-  const agentRows = Object.entries(statuses).map(([id, status]) => ({
-    id,
-    projectName: projects.find((p) => p.id === id)?.name ?? id,
-    status,
-    tokensIn: 0,
-    tokensOut: 0,
-    runtimeSecs: 0,
-  }))
+  // Agent monitor rows — built from chat sessions (each chat with activity = one agent row)
+  const agentRows = Object.entries(chatsByProject).flatMap(([pid, ids]) => {
+    const proj = projects.find(p => p.id === pid)
+    return (ids ?? [])
+      .map(id => chats[id])
+      .filter((c): c is NonNullable<typeof c> =>
+        !!c && (c.messages.length > 0 || c.status === 'streaming'))
+      .map(c => ({
+        id: c.id,
+        projectName: `${proj?.name ?? 'project'} · ${c.title}`,
+        status: (c.status === 'streaming' ? 'running' : c.status === 'error' ? 'error' : 'idle') as 'running' | 'idle' | 'error',
+        tokensIn: c.totalInputTokens,
+        tokensOut: c.totalOutputTokens,
+        runtimeSecs: 0,
+      }))
+  })
+
+  // Per-project aggregate totals (cost + tokens in/out) across all its chats
+  const projectTotals = (projectId: string) => {
+    const ids = chatsByProject[projectId] ?? []
+    let cost = 0, tokensIn = 0, tokensOut = 0
+    for (const id of ids) {
+      const c = chats[id]
+      if (c) { cost += c.totalCost; tokensIn += c.totalInputTokens; tokensOut += c.totalOutputTokens }
+    }
+    return { cost, tokensIn, tokensOut }
+  }
 
   const getAgentCount = (projectId: string) => {
-    const legacy = statuses[projectId] === 'running' ? 1 : 0
-    return legacy + (isProjectActive(projectId) ? 1 : 0)
+    const ids = chatsByProject[projectId] ?? []
+    const running = ids.filter(id => chats[id]?.status === 'streaming').length
+    return running + (ptyStatus[projectId] === 'running' ? 1 : 0)
   }
 
   return (
@@ -802,15 +879,21 @@ export function Hub({ onOpenProject }: HubProps) {
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">
-                {filteredProjects.map((p) => (
-                  <ProjectCard
-                    key={p.id}
-                    project={p}
-                    agentCount={getAgentCount(p.id)}
-                    onOpen={async () => { await touch(p.id); onOpenProject(p) }}
-                    onDelete={() => remove(p.id)}
-                  />
-                ))}
+                {filteredProjects.map((p) => {
+                  const totals = projectTotals(p.id)
+                  return (
+                    <ProjectCard
+                      key={p.id}
+                      project={p}
+                      agentCount={getAgentCount(p.id)}
+                      tokensIn={totals.tokensIn}
+                      tokensOut={totals.tokensOut}
+                      totalCost={totals.cost}
+                      onOpen={async () => { await touch(p.id); onOpenProject(p) }}
+                      onDelete={() => remove(p.id)}
+                    />
+                  )
+                })}
               </div>
             )}
           </div>

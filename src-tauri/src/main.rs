@@ -11,9 +11,10 @@ use commands::{
     agent::{chat_message, interrupt_chat, respond_permission, send_chat_stream, send_to_agent, spawn_agent, stop_agent},
     session::{get_session_history, list_project_sessions},
     library::{
-        add_marketplace, create_agent, ensure_lead_orchestrator, get_auth_status, get_claude_binary,
+        add_marketplace, auth_login, auth_logout, auth_status_json, create_agent,
+        ensure_lead_orchestrator, get_auth_status, get_claude_binary,
         get_library, init_skill, install_github_skill, install_plugin,
-        launch_claude_login, list_github_skills, rescan_library, set_api_key,
+        list_github_skills, rescan_library, set_api_key,
     },
     project::{create_project, delete_project, get_projects, list_directory, read_contract, read_file, touch_project, write_contract, write_file},
     terminal::{is_pty_running, resize_pty, start_pty, stop_pty, write_pty},
@@ -169,7 +170,9 @@ fn main() {
             get_claude_binary,
             get_auth_status,
             set_api_key,
-            launch_claude_login,
+            auth_status_json,
+            auth_login,
+            auth_logout,
             // Plugin / skill / agent management
             install_plugin,
             add_marketplace,

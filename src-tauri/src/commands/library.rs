@@ -5,7 +5,7 @@ use dirs::home_dir;
 use scopeguard::defer;
 use serde_json::Value;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
 pub async fn get_library(state: State<'_, Arc<AppState>>) -> Result<Vec<SkillItem>, String> {
@@ -34,43 +34,115 @@ pub async fn set_api_key(
     Ok(())
 }
 
+/// Run `claude auth status --json` and return the raw JSON (frontend parses it).
 #[tauri::command]
-pub async fn launch_claude_login(
-    state: State<'_, Arc<AppState>>,
-) -> Result<String, String> {
+pub async fn auth_status_json(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     let binary = state.claude_binary.read().clone().ok_or("Claude CLI not found")?;
-    let check = std::process::Command::new(&binary)
-        .arg("--print")
-        .env("ANTHROPIC_API_KEY", "")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
+    let shell_env: Vec<(String, String)> = state.shell_env.read().clone().into_iter().collect();
 
-    match check {
-        Ok(mut child) => {
-            use std::io::Write;
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = writeln!(stdin, "hello");
-            }
-            let out = child.wait_with_output().map_err(|e| e.to_string())?;
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            if stderr.to_lowercase().contains("login") || stderr.to_lowercase().contains("auth") {
-                Ok("needs_login".into())
-            } else {
-                Ok("authenticated".into())
-            }
+    let mut cmd = std::process::Command::new(&binary);
+    cmd.args(["auth", "status", "--json"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    for (k, v) in &shell_env { cmd.env(k, v); }
+
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Ok("{\"loggedIn\":false}".into());
+    }
+    Ok(stdout)
+}
+
+/// Start interactive browser OAuth login via `claude auth login`.
+/// mode = "claudeai" (subscription, default) | "console" (API billing).
+/// Streams progress as `auth:event` and emits `auth:done` { success } when finished.
+#[tauri::command]
+pub async fn auth_login(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    mode: String,
+) -> Result<(), String> {
+    use std::io::{BufRead, BufReader};
+    let binary = state.claude_binary.read().clone().ok_or("Claude CLI not found")?;
+    // Drop ANTHROPIC_API_KEY so the OAuth flow runs (key would short-circuit auth)
+    let shell_env: Vec<(String, String)> = state.shell_env.read().clone()
+        .into_iter().filter(|(k, _)| k != "ANTHROPIC_API_KEY").collect();
+
+    let flag = if mode == "console" { "--console" } else { "--claudeai" };
+
+    std::thread::spawn(move || {
+        let mut cmd = std::process::Command::new(&binary);
+        cmd.args(["auth", "login", flag])
+            .env_remove("ANTHROPIC_API_KEY")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        for (k, v) in &shell_env { cmd.env(k, v); }
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => { let _ = app.emit("auth:done", serde_json::json!({"success": false, "error": e.to_string()})); return; }
+        };
+
+        // Stream stdout + stderr lines as auth:event (CLI prints the login URL here)
+        if let Some(stdout) = child.stdout.take() {
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    let _ = app2.emit("auth:event", line);
+                }
+            });
         }
-        Err(e) => Err(e.to_string()),
+        if let Some(stderr) = child.stderr.take() {
+            let app3 = app.clone();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    let _ = app3.emit("auth:event", line);
+                }
+            });
+        }
+
+        let status = child.wait();
+        let success = status.map(|s| s.success()).unwrap_or(false);
+        let _ = app.emit("auth:done", serde_json::json!({"success": success}));
+    });
+
+    Ok(())
+}
+
+/// Log out: `claude auth logout`.
+#[tauri::command]
+pub async fn auth_logout(state: State<'_, Arc<AppState>>) -> Result<String, String> {
+    let binary = state.claude_binary.read().clone().ok_or("Claude CLI not found")?;
+    let shell_env: Vec<(String, String)> = state.shell_env.read().clone().into_iter().collect();
+    let mut cmd = std::process::Command::new(&binary);
+    cmd.args(["auth", "logout"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    for (k, v) in &shell_env { cmd.env(k, v); }
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok("logged_out".into())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
     }
 }
 
+/// Legacy: simple API-key presence check (kept for the title-bar indicator).
 #[tauri::command]
 pub async fn get_auth_status(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     let env = state.shell_env.read();
     match env.get("ANTHROPIC_API_KEY") {
         Some(key) if !key.is_empty() => {
-            let masked = format!("{}...{}", &key[..12], &key[key.len()-4..]);
+            // char-safe masking (never slice on byte/UTF-8 boundary)
+            let chars: Vec<char> = key.chars().collect();
+            let masked = if chars.len() > 16 {
+                let head: String = chars.iter().take(12).collect();
+                let tail: String = chars.iter().rev().take(4).rev().collect();
+                format!("{}...{}", head, tail)
+            } else {
+                "•".repeat(chars.len())
+            };
             Ok(format!("✅ API key found: {}", masked))
         }
         _ => Ok("❌ ANTHROPIC_API_KEY not found in captured env".to_string()),

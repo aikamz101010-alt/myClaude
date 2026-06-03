@@ -47,9 +47,9 @@ impl ProcessManager {
         }
 
         let mut child = cmd.spawn()?;
-        let stdout = child.stdout.take().expect("stdout");
-        let stderr = child.stderr.take().expect("stderr");
-        let stdin = child.stdin.take().expect("stdin");
+        let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
+        let stderr = child.stderr.take().ok_or_else(|| anyhow::anyhow!("no stderr"))?;
+        let stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("no stdin"))?;
 
         let pid = project_id.clone();
         let app_out = app.clone();

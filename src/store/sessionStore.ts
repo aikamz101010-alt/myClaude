@@ -408,10 +408,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             break
           }
           case 'permission_request': {
+            // Coerce to string defensively — never store an object (would crash render)
+            const pin = e.tool_input as unknown
+            const inputStr = typeof pin === 'string' ? pin : pin == null ? '' : (() => { try { return JSON.stringify(pin) } catch { return String(pin) } })()
             pendingPermission = {
               requestId: e.request_id ?? '',
-              tool: e.tool_name ?? 'tool',
-              input: e.tool_input ?? '',
+              tool: typeof e.tool_name === 'string' ? e.tool_name : 'tool',
+              input: inputStr,
             }
             break
           }
