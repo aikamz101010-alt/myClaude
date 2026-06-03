@@ -99,9 +99,37 @@ pub async fn auth_logout(state: State<'_, Arc<AppState>>) -> Result<String, Stri
     }
 }
 
-/// Legacy: simple API-key presence check (kept for the title-bar indicator).
+/// Title-bar / dashboard auth indicator.
+/// Reflects real login state: subscription/console OAuth (`claude auth status`)
+/// OR a raw ANTHROPIC_API_KEY. Returns a string starting with ✅ when authenticated.
 #[tauri::command]
 pub async fn get_auth_status(state: State<'_, Arc<AppState>>) -> Result<String, String> {
+    let binary = state.claude_binary.read().clone();
+    let shell_env: Vec<(String, String)> = state.shell_env.read().clone().into_iter().collect();
+
+    // 1. Prefer the CLI's real login status (covers subscription login with no API key).
+    if let Some(bin) = &binary {
+        let mut cmd = std::process::Command::new(bin);
+        cmd.args(["auth", "status", "--json"]);
+        for (k, v) in &shell_env { cmd.env(k, v); }
+        if let Ok(out) = cmd.output() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if let Ok(v) = serde_json::from_str::<Value>(s.trim()) {
+                if v.get("loggedIn").and_then(|b| b.as_bool()).unwrap_or(false) {
+                    let email = v.get("email").and_then(|e| e.as_str()).unwrap_or("");
+                    let sub = v.get("subscriptionType").and_then(|e| e.as_str());
+                    let label = match (email.is_empty(), sub) {
+                        (false, Some(s)) => format!("✅ Signed in: {} · {}", email, s),
+                        (false, None) => format!("✅ Signed in: {}", email),
+                        _ => "✅ Signed in".to_string(),
+                    };
+                    return Ok(label);
+                }
+            }
+        }
+    }
+
+    // 2. Fallback: raw API key presence.
     let env = state.shell_env.read();
     match env.get("ANTHROPIC_API_KEY") {
         Some(key) if !key.is_empty() => {
@@ -116,7 +144,7 @@ pub async fn get_auth_status(state: State<'_, Arc<AppState>>) -> Result<String, 
             };
             Ok(format!("✅ API key found: {}", masked))
         }
-        _ => Ok("❌ ANTHROPIC_API_KEY not found in captured env".to_string()),
+        _ => Ok("❌ Not signed in".to_string()),
     }
 }
 

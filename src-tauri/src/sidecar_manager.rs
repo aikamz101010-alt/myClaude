@@ -219,35 +219,9 @@ fn normalize_event(ev: &Value) -> Value {
     }
 }
 
-/// Detect a usable `node` binary.
+/// Detect a usable `node` binary (cross-platform).
 pub fn detect_node_binary() -> Option<String> {
-    if let Ok(out) = Command::new("which").arg("node").output() {
-        if out.status.success() {
-            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !p.is_empty() && std::path::Path::new(&p).exists() {
-                return Some(p);
-            }
-        }
-    }
-    for path in &["/opt/homebrew/bin/node", "/usr/local/bin/node"] {
-        if std::path::Path::new(path).exists() {
-            return Some(path.to_string());
-        }
-    }
-    if let Some(home) = dirs::home_dir() {
-        let nvm_base = home.join(".nvm/versions/node");
-        if let Ok(entries) = std::fs::read_dir(&nvm_base) {
-            let mut paths: Vec<_> = entries.flatten().collect();
-            paths.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
-            for entry in paths {
-                let bin = entry.path().join("bin/node");
-                if bin.exists() {
-                    return Some(bin.to_string_lossy().into());
-                }
-            }
-        }
-    }
-    None
+    crate::platform::which("node").or_else(|| crate::platform::fallback_binary("node"))
 }
 
 /// Resolve the sidecar script path (dev: project/sidecar/agent.mjs).

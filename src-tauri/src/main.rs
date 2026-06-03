@@ -2,14 +2,14 @@
 
 mod auth_manager;
 mod commands;
-mod process;
+mod platform;
 mod pty_manager;
 mod scanner;
 mod sidecar_manager;
 mod state;
 
 use commands::{
-    agent::{chat_message, interrupt_chat, respond_permission, send_chat_stream, send_to_agent, spawn_agent, stop_agent},
+    agent::{interrupt_chat, respond_permission, send_chat_stream},
     session::{get_session_history, list_project_sessions},
     library::{
         add_marketplace, auth_login, auth_logout, auth_status_json, auth_submit_code,
@@ -21,7 +21,6 @@ use commands::{
     terminal::{is_pty_running, resize_pty, start_pty, stop_pty, write_pty},
 };
 use auth_manager::AuthManager;
-use process::ProcessManager;
 use pty_manager::PtyManager;
 use sidecar_manager::SidecarManager;
 use state::AppState;
@@ -42,6 +41,10 @@ fn capture_shell_env() -> HashMap<String, String> {
         }
     }
 
+    // Steps 2 & 3 are unix-specific (login shells + dotfiles). On Windows the user
+    // environment is already inherited in step 1, so we skip them there.
+    #[cfg(unix)]
+    {
     // Step 2: Source login shells to pick up profile vars
     for shell in &["/bin/bash", "/bin/zsh"] {
         if let Ok(o) = std::process::Command::new(shell)
@@ -94,6 +97,7 @@ fn capture_shell_env() -> HashMap<String, String> {
             }
         }
     }
+    } // end #[cfg(unix)]
 
     env
 }
@@ -115,7 +119,6 @@ fn is_relevant_key(k: &str) -> bool {
 
 fn main() {
     let app_state = AppState::new();
-    let process_manager = ProcessManager::new();
     let pty_manager = PtyManager::new();
     let auth_manager = AuthManager::new();
     let sidecar_manager = SidecarManager::new();
@@ -128,7 +131,6 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(app_state.clone())
-        .manage(process_manager)
         .manage(pty_manager)
         .manage(auth_manager)
         .manage(sidecar_manager.clone())
@@ -192,16 +194,10 @@ fn main() {
             // Session history
             get_session_history,
             list_project_sessions,
-            // Chat (claude --print, legacy)
-            chat_message,
             // Chat via Agent SDK sidecar
             send_chat_stream,
             respond_permission,
             interrupt_chat,
-            // Persistent agent session
-            spawn_agent,
-            send_to_agent,
-            stop_agent,
             // PTY terminal (real embedded claude CLI)
             start_pty,
             write_pty,

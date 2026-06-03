@@ -7,45 +7,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub fn detect_claude_binary() -> Option<String> {
-    // 1. `which claude` — fastest, works when launched from a terminal with PATH set
-    if let Ok(out) = std::process::Command::new("which").arg("claude").output() {
-        if out.status.success() {
-            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !p.is_empty() && std::path::Path::new(&p).exists() {
-                return Some(p);
-            }
-        }
-    }
-
-    // 2. Well-known Homebrew / system paths
-    for path in &["/opt/homebrew/bin/claude", "/usr/local/bin/claude"] {
-        if std::path::Path::new(path).exists() {
-            return Some(path.to_string());
-        }
-    }
-
-    // 3. NVM installs — scan all node versions (newest first)
-    if let Some(home) = home_dir() {
-        let nvm_base = home.join(".nvm/versions/node");
-        if let Ok(entries) = std::fs::read_dir(&nvm_base) {
-            let mut paths: Vec<_> = entries.flatten().collect();
-            paths.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
-            for entry in paths {
-                let bin = entry.path().join("bin/claude");
-                if bin.exists() {
-                    return Some(bin.to_string_lossy().into());
-                }
-            }
-        }
-        // 4. npm global (non-nvm) and ~/.local/bin
-        for suffix in &[".npm-global/bin/claude", ".local/bin/claude"] {
-            let p = home.join(suffix);
-            if p.exists() {
-                return Some(p.to_string_lossy().into());
-            }
-        }
-    }
-    None
+    // PATH lookup first (terminal launch), then platform fallbacks (Finder/Explorer launch).
+    crate::platform::which("claude").or_else(|| crate::platform::fallback_binary("claude"))
 }
 
 pub async fn scan_library(state: Arc<AppState>) {

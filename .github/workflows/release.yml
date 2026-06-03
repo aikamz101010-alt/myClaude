@@ -9,13 +9,25 @@ permissions:
   contents: write
 
 jobs:
-  build-macos:
-    runs-on: macos-latest
+  build:
     strategy:
+      fail-fast: false
       matrix:
-        target:
-          - aarch64-apple-darwin
-          - x86_64-apple-darwin
+        include:
+          # macOS — Apple Silicon
+          - os: macos-latest
+            rust-target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          # macOS — Intel
+          - os: macos-latest
+            rust-target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          # Windows — x64 (.msi + .exe NSIS)
+          - os: windows-latest
+            rust-target: ''
+            args: ''
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +35,12 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rust-target }}
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -37,9 +54,13 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Claude Desktop ${{ github.ref_name }}'
+          releaseName: 'Claude X ${{ github.ref_name }}'
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          args: ${{ matrix.args }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Required so the updater artifacts (.sig) are signed with the key
+          # matching `pubkey` in tauri.conf.json — without these, auto-update fails.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}

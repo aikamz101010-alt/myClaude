@@ -828,6 +828,12 @@ export function Hub({ onOpenProject }: HubProps) {
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState<'added' | 'name' | 'activity'>('added')
   const isAuthOk = authStatus.startsWith('✅')
+  // Show the actual account + plan (e.g. "indera6th@gmail.com · max") instead of "Auth OK"
+  const authLabel = authStatus.startsWith('✅ Signed in: ')
+    ? authStatus.slice('✅ Signed in: '.length)
+    : authStatus.startsWith('✅ API key found')
+      ? 'API key'
+      : 'No auth'
 
   useEffect(() => {
     loadProjects()
@@ -926,8 +932,8 @@ export function Hub({ onOpenProject }: HubProps) {
             {isAuthOk
               ? <CheckCircle className="w-3 h-3" />
               : <AlertTriangle className="w-3 h-3" />}
-            <span className="hidden sm:inline text-xs">
-              {isAuthOk ? 'Auth OK' : 'No auth'}
+            <span className="hidden sm:inline text-xs max-w-[220px] truncate">
+              {authLabel}
             </span>
           </div>
 
