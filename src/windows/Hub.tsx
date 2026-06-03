@@ -441,12 +441,14 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     setFeedbackTemp('🔄 Auth re-checked')
   }
 
-  // The CLI log may print an "if the browser didn't open" fallback URL — surface
-  // it as its own form (like the main login link) rather than buried in the log.
+  // The CLI log may print an "if the browser didn't open" URL — surface it as a
+  // form (like the main login link) rather than as raw text in the log. Used both
+  // as a fallback when the auth:url event didn't fire and to strip URLs from the
+  // visible log.
   const fallbackUrl = (() => {
     for (const line of loginLog) {
       const m = line.match(/https?:\/\/[^\s'"]+/)
-      if (m && m[0] !== loginUrl) return m[0]
+      if (m) return m[0]
     }
     return ''
   })()
@@ -552,11 +554,14 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                 <LogIn className="w-3.5 h-3.5" /> API billing
               </button>
             </div>
-            {/* OAuth login link + fallback link as forms; opens automatically too */}
-            {loginUrl && (
+            {/* OAuth login link as a form; opens automatically too. Falls back to
+                the URL parsed from the log if the auth:url event didn't fire. */}
+            {(loginUrl || fallbackUrl) && (
               <div className="mt-3 p-2.5 rounded-lg bg-surface border border-accent/20">
-                <LoginLinkForm url={loginUrl} label="Login link" />
-                {fallbackUrl && <LoginLinkForm url={fallbackUrl} label="If the browser didn't open, use this link" />}
+                <LoginLinkForm url={loginUrl || fallbackUrl} label="Login link" />
+                {loginUrl && fallbackUrl && fallbackUrl !== loginUrl && (
+                  <LoginLinkForm url={fallbackUrl} label="If the browser didn't open, use this link" />
+                )}
                 <p className="text-xs font-mono text-muted/60 mt-3 mb-1">
                   Authorize in the browser, copy the code shown, paste it here:
                 </p>
@@ -578,7 +583,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
             )}
             {loginLog.length > 0 && (
               <pre className="mt-2 max-h-28 overflow-y-auto bg-surface rounded-lg p-2 text-xs font-mono text-muted/80 whitespace-pre-wrap break-all">
-                {loginLog.join('\n')}
+                {loginLog.map(l => l.replace(/https?:\/\/\S+/g, '🔗 (lihat form “Login link” di atas)')).join('\n')}
               </pre>
             )}
             {loggingIn && !loginUrl && (

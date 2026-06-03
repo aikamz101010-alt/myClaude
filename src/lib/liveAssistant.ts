@@ -17,7 +17,12 @@ export interface PerformanceCue {
   gesture: string // a gesture name from the library, or 'none'
 }
 
-const HAIKU = 'claude-haiku-4-5-20251001'
+// Director model options → full model IDs.
+export const LIVE_MODEL_ID: Record<'haiku' | 'sonnet' | 'opus', string> = {
+  haiku: 'claude-haiku-4-5-20251001',
+  sonnet: 'claude-sonnet-4-6',
+  opus: 'claude-opus-4-8',
+}
 
 /** All gesture names the director may choose from (idle + speaking). */
 export function gestureNames(): string[] {
@@ -79,13 +84,14 @@ export async function runDirector(reply: string, workingDir: string): Promise<Pe
     }
   })
 
+  const { liveModel } = useAvatarStore.getState()
   try {
     await invoke('send_chat_stream', {
       projectId: channel,           // separate event channel = separate session
       message: buildPrompt(reply),
       workingDir,
       sessionId: null,              // fresh session — no working-chat context
-      model: HAIKU,
+      model: LIVE_MODEL_ID[liveModel],
       permissionMode: 'default',
     })
     await done
@@ -99,10 +105,12 @@ export async function runDirector(reply: string, workingDir: string): Promise<Pe
   return parseCue(acc)
 }
 
-/** Write/refresh the local live-virtual-assistant agent file from the persona.
- * Best-effort: `.claude/agents/` already exists in managed projects. */
-export async function ensureLiveAssistantAgent(workingDir: string): Promise<void> {
-  const { assistantName, persona } = useAvatarStore.getState()
+/** Write/refresh the live-virtual-assistant agent file from the persona, to the
+ * global `~/.claude/agents/` folder (shared across all projects). The directory
+ * is ensured first by calling `create_agent` (which runs create_dir_all before
+ * its own write); we then overwrite with the persona-aware content. */
+export async function ensureLiveAssistantAgent(): Promise<void> {
+  const { assistantName, persona, liveModel } = useAvatarStore.getState()
   const name = assistantName || 'Assistant'
   const body = `---
 name: live-virtual-assistant
@@ -119,7 +127,13 @@ Given an assistant reply, choose ONE emotion and ONE gesture matching its tone.
 Output ONLY compact JSON: {"emotion":"<emotion>","gesture":"<gesture>"}
 Never use tools.
 `
+  // Ensure ~/.claude/agents exists (create_agent runs create_dir_all first).
   try {
-    await invoke('write_file', { path: `${workingDir}/.claude/agents/live-virtual-assistant.md`, content: body })
-  } catch { /* dir may not exist yet — non-fatal */ }
+    await invoke('create_agent', { name: 'live-virtual-assistant', description: `Director for ${name}`, model: liveModel })
+  } catch { /* already exists or validation — dir is created regardless */ }
+  try {
+    await invoke('write_file', { path: '~/.claude/agents/live-virtual-assistant.md', content: body })
+  } catch (e) {
+    console.warn('[live-assistant] could not write agent file:', e)
+  }
 }

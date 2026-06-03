@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 import { ChatInput, type AttachedFile } from './ChatInput'
 import { AvatarVoiceSettings } from '@/components/settings/AvatarVoiceSettings'
 import { STANDBY_POSES, nextStandbyPose, SPEAK_GESTURES, nextSpeakGesture, type StandbyPose } from '@/lib/standbyPoses'
-import { runDirector, ensureLiveAssistantAgent, type Emotion } from '@/lib/liveAssistant'
+import { runDirector, type Emotion } from '@/lib/liveAssistant'
 
 // A live-assistant performance cue applied for a short window.
 interface ActiveCue { emotion: Emotion; gesture: string; until: number }
@@ -567,11 +567,6 @@ function useLiveAssistant(chatId: string | null, active: boolean, cueRef: Mutabl
   const workingDir = useSessionStore(s => (chatId ? s.chats[chatId]?.workingDir : undefined))
   const liveAssistant = useAvatarStore(s => s.liveAssistant)
   const lastId = useRef<string | null>(null)
-
-  // (Re)generate the local agent file whenever Live Assistant is enabled.
-  useEffect(() => {
-    if (liveAssistant && active && workingDir) void ensureLiveAssistantAgent(workingDir)
-  }, [liveAssistant, active, workingDir])
 
   useEffect(() => {
     const msgs = messages

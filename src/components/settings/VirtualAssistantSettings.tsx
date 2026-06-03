@@ -1,9 +1,12 @@
 import { useState } from 'react'
-import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { open as openDialog, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { useAvatarStore, DEFAULT_VRM_URL } from '@/store/avatarStore'
+import { ensureLiveAssistantAgent } from '@/lib/liveAssistant'
 import { cn } from '@/lib/utils'
-import { Sparkles, Upload, User, Check, RotateCcw } from 'lucide-react'
+import { Sparkles, Upload, User, Check, RotateCcw, Cpu, Trash2 } from 'lucide-react'
+
+type LiveModel = 'haiku' | 'sonnet' | 'opus'
 
 /**
  * Virtual Assistant identity form (Hub → Settings).
@@ -23,6 +26,7 @@ export function VirtualAssistantSettings() {
   const [gender, setGender] = useState<'woman' | 'man'>(store.voiceGender)
   const [vrmUrl, setVrmUrl] = useState(store.vrmUrl)
   const [vrmLabel, setVrmLabel] = useState(store.vrmUrl === DEFAULT_VRM_URL ? 'Bawaan (Claudia)' : 'VRM custom')
+  const [model, setModel] = useState<LiveModel>(store.liveModel)
   const [saved, setSaved] = useState(false)
 
   const isCustomVrm = vrmUrl !== DEFAULT_VRM_URL
@@ -53,8 +57,29 @@ export function VirtualAssistantSettings() {
     // Default VRM forces female voice; custom VRM honors the chosen gender.
     store.setVoiceGender(isCustomVrm ? gender : 'woman')
     store.setVrmUrl(vrmUrl)
+    store.setLiveModel(model)
+    // Generate/refresh the live-virtual-assistant agent file from the persona.
+    void ensureLiveAssistantAgent()
     setSaved(true)
     setTimeout(() => setSaved(false), 2500)
+  }
+
+  // Delete = reset the assistant back to the built-in default (with confirmation).
+  const remove = async () => {
+    const ok = await confirmDialog(
+      'Hapus virtual assistant ini dan kembalikan ke karakter bawaan (Claudia)? Persona & VRM custom akan dihapus.',
+      { title: 'Hapus Virtual Assistant', kind: 'warning' },
+    )
+    if (!ok) return
+    store.setAssistantName('Claudia')
+    store.setPersona('')
+    store.setVoiceGender('woman')
+    store.setVrmUrl(DEFAULT_VRM_URL)
+    store.setLiveAssistant(false)
+    // Reset the draft form too.
+    setName('Claudia'); setPersona(''); setGender('woman')
+    setVrmUrl(DEFAULT_VRM_URL); setVrmLabel('Bawaan (Claudia)')
+    void ensureLiveAssistantAgent() // refresh agent file to the default persona
   }
 
   return (
@@ -119,6 +144,25 @@ export function VirtualAssistantSettings() {
         )}
       </div>
 
+      {/* Live Assistant model */}
+      <div>
+        <p className="text-[11px] text-text mb-1 flex items-center gap-1">
+          <Cpu className="w-3 h-3" /> Model Live Assistant
+        </p>
+        <div className="flex gap-1">
+          {([['haiku', 'Haiku'], ['sonnet', 'Sonnet'], ['opus', 'Opus']] as [LiveModel, string][]).map(([m, l]) => (
+            <button key={m} onClick={() => setModel(m)}
+              className={cn('flex-1 px-2 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors border',
+                model === m ? 'bg-accent/15 text-accent border-accent/40' : 'text-muted hover:text-text border-white/10')}>
+              {l}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-muted/50 mt-0.5">
+          {model === 'haiku' ? 'Cepat & hemat kuota (disarankan)' : model === 'sonnet' ? 'Lebih cerdas, kuota lebih besar' : 'Paling cerdas, kuota paling besar'}
+        </p>
+      </div>
+
       {/* Save */}
       <button onClick={save} disabled={!canSave}
         className={cn('w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-mono font-semibold transition-colors',
@@ -128,6 +172,12 @@ export function VirtualAssistantSettings() {
       {!canSave && (
         <p className="text-[10px] text-error/80">Nama & Persona wajib diisi.</p>
       )}
+
+      {/* Delete (with confirmation) */}
+      <button onClick={remove}
+        className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-xl text-[11px] font-mono text-error/80 hover:text-error hover:bg-error/10 border border-error/20 cursor-pointer transition-colors">
+        <Trash2 className="w-3.5 h-3.5" /> Hapus virtual assistant
+      </button>
     </div>
   )
 }
