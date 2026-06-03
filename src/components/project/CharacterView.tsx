@@ -10,6 +10,7 @@ import { enqueueSpeech, resetNarration, markNarrated, stopSpeaking, sanitizeForS
 import { cn } from '@/lib/utils'
 import { ChatInput, type AttachedFile } from './ChatInput'
 import { AvatarVoiceSettings } from '@/components/settings/AvatarVoiceSettings'
+import { STANDBY_POSES, nextStandbyPose } from '@/lib/standbyPoses'
 
 interface Props {
   chatId: string | null
@@ -113,11 +114,12 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
     let camX = 0             // smoothed camera x (follows model)
     let legPhase = 0
     let faceAngle = 0        // smoothed Y rotation
-    let idleDwell = 0        // seconds spent continuously idle (gates walking)
     // Eye saccades (gaze darts to a new spot, then holds).
     let gazeX = 0, gazeY = 0, gazeTX = 0, gazeTY = 0, nextSaccadeAt = 0
     // Occasional idle hand gesture.
     let idleGestureUntil = 0, nextIdleGestureAt = 4, idleGestureSide: 'l' | 'r' = 'r'
+    // Standby pose cycling (VRoid-style): hold a pose, then switch to a random one.
+    let standbyIdx = 0, standbyUntil = 0
 
     const lerpRot = (
       b: THREE.Object3D | null | undefined,
@@ -156,11 +158,8 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
         const lUA = bone('leftUpperArm');  const rUA = bone('rightUpperArm')
         const lLA = bone('leftLowerArm');  const rLA = bone('rightLowerArm')
 
-        // ── Walk ONLY when genuinely idle for a moment (never while thinking/speaking) ──
-        const canWalk = !thinking && !speaking
-        idleDwell = canWalk ? idleDwell + delta : 0
-        const wander = idleDwell > 2.5   // settle first, then pace around
-        const targetX = wander ? Math.sin(time * 0.23) * 0.95 : 0
+        // ── Standby: stand centered and strike poses — no pacing left/right ──
+        const targetX = 0
         const prevX = modelX
         modelX += (targetX - modelX) * Math.min(1, delta * 1.4)
         const vx = (modelX - prevX) / (delta || 1 / 60)
@@ -227,7 +226,6 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
         // Note on clipping: forearms are lifted FORWARD (negative upper-arm X +
         // strong elbow bend) so the hands sit in front of the torso, clear of the
         // skirt mesh, instead of hanging down into it.
-        const armSwing = moving ? Math.sin(legPhase) * 0.25 : 0
         let lUAz: number, lUAx: number, rUAz: number, rUAx: number, lLAz: number, rLAz: number
         if (thinking) {
           // Pondering: right hand up toward the chin, left arm relaxed down.
@@ -245,14 +243,18 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
           lLAz = -0.85 - Math.abs(Math.sin(time * 2.1)) * 0.45
           rLAz = 0.85 + Math.abs(Math.sin(time * 2.6 + 1.0)) * 0.45
         } else {
-          // Idle: arms rest slightly forward & outward so hands clear the skirt.
-          lUAz = -1.35 + Math.sin(time * 0.9) * 0.04
-          lUAx = 0.08 + Math.sin(time * 0.7) * 0.05 - armSwing
-          rUAz = 1.35 + Math.sin(time * 0.9 + 1.0) * 0.04
-          rUAx = 0.08 + Math.sin(time * 0.7 + 0.5) * 0.05 + armSwing
-          lLAz = -0.18; rLAz = 0.18
-          if (idleGestureSide === 'r') { rUAx -= idleG * 0.7; rLAz += idleG * 0.6 }
-          else { lUAx -= idleG * 0.7; lLAz -= idleG * 0.6 }
+          // Standby: cycle through VRoid-style poses — hold one a few seconds,
+          // then smoothly transition to a random different pose. A subtle breath
+          // keeps the held pose from looking frozen.
+          if (time > standbyUntil) {
+            standbyIdx = standbyUntil === 0 ? 0 : nextStandbyPose(standbyIdx)
+            standbyUntil = time + 5 + Math.random() * 4   // hold 5–9s
+          }
+          const p = STANDBY_POSES[standbyIdx]
+          const breath = Math.sin(time * 0.9) * 0.03
+          lUAz = p.lUAz + breath; lUAx = p.lUAx
+          rUAz = p.rUAz - breath; rUAx = p.rUAx
+          lLAz = p.lLAz; rLAz = p.rLAz
         }
         // Faster lerp while speaking so the gesticulation is clearly visible.
         const armK = speaking ? 0.30 : 0.16
