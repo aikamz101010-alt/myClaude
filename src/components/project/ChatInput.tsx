@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { cn } from '@/lib/utils'
-import { useLibraryStore } from '@/store/libraryStore'
-import { buildClassifier, useTagColors } from '@/lib/tagColors'
-import { Plus, Slash, Mic, Square, ArrowUp, X, FileText, Loader2, Cpu, Check, CornerDownLeft, Shield, Zap } from 'lucide-react'
+import { useLibraryStore, type SkillItem } from '@/store/libraryStore'
+import { buildClassifier, tagPrefix, useTagColors, type TagType } from '@/lib/tagColors'
+import { Plus, Slash, Mic, Square, ArrowUp, X, FileText, Loader2, Cpu, Check, CornerDownLeft, Shield, Zap, Boxes } from 'lucide-react'
 
 export interface AttachedFile {
   path: string
@@ -80,6 +80,8 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
   const [cmdFilter, setCmdFilter] = useState('')
   const [showModels, setShowModels] = useState(false)
   const [showPerms, setShowPerms] = useState(false)
+  const [showLib, setShowLib]     = useState(false)
+  const [libFilter, setLibFilter] = useState('')
   const [listening, setListening] = useState(false)
   const [enterNewline, setEnterNewline] = useState(false)  // toggle: Enter = newline
   const [voiceSupported] = useState(() => getSpeechRecognition() !== null)
@@ -101,6 +103,40 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
   const filteredCmds = commands.filter(c =>
     c.toLowerCase().includes(cmdFilter.toLowerCase())
   ).slice(0, 8)
+
+  // ── Library picker (insert /skill, @agent, @plugin tokens) ─────
+  const itemToType = (t: string): TagType | null =>
+    t === 'skill' ? 'skill'
+    : t === 'agent' ? 'agent'
+    : (t === 'plugin' || t === 'mcp') ? 'plugin'
+    : null
+
+  const libGroups = useMemo(() => {
+    const q = libFilter.trim().toLowerCase()
+    const groups: { type: TagType; label: string; items: SkillItem[] }[] = [
+      { type: 'skill',  label: 'Skills',  items: [] },
+      { type: 'agent',  label: 'Agents',  items: [] },
+      { type: 'plugin', label: 'Plugins', items: [] },
+    ]
+    for (const it of items) {
+      const ty = itemToType(it.item_type)
+      if (!ty) continue
+      if (q && !it.name.toLowerCase().includes(q) && !it.description.toLowerCase().includes(q)) continue
+      groups.find(g => g.type === ty)!.items.push(it)
+    }
+    return groups.filter(g => g.items.length > 0)
+  }, [items, libFilter])
+
+  const insertTag = (item: SkillItem) => {
+    const ty = itemToType(item.item_type) ?? 'skill'
+    const token = tagPrefix(ty) + item.name
+    setText(prev => {
+      const sep = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : ''
+      return prev + sep + token + ' '
+    })
+    setShowLib(false)
+    textareaRef.current?.focus()
+  }
 
   // Auto-resize textarea
   const autoResize = useCallback(() => {
@@ -291,6 +327,49 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
 
   return (
     <div className="relative px-3 pb-3">
+      {/* Library picker popup (skill / agent / plugin) */}
+      {showLib && (
+        <div className="absolute bottom-full left-3 right-3 mb-2 glass rounded-xl border border-white/10 shadow-2xl overflow-hidden z-20">
+          <div className="px-3 py-1.5 border-b border-white/5 flex items-center gap-2">
+            <Boxes className="w-3 h-3 text-accent/60 flex-shrink-0" />
+            <span className="text-xs font-mono text-muted">Library</span>
+            <input
+              autoFocus
+              value={libFilter}
+              onChange={e => setLibFilter(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Escape') setShowLib(false) }}
+              placeholder="Search…"
+              className="ml-auto bg-transparent text-xs font-mono text-text placeholder-muted/50 focus:outline-none w-28"
+            />
+          </div>
+          <div className="max-h-60 overflow-y-auto p-1">
+            {libGroups.length === 0 && (
+              <p className="px-2.5 py-2 text-xs font-mono text-muted/60">Tidak ada item — install dari Hub › Library.</p>
+            )}
+            {libGroups.map(g => (
+              <div key={g.type} className="mb-1">
+                <p className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-muted/50">{g.label}</p>
+                {g.items.map(it => (
+                  <button
+                    key={it.id}
+                    onClick={() => insertTag(it)}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-surface2/60 cursor-pointer transition-colors"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: TAG_COLORS[g.type] }} />
+                    <span className="text-xs font-mono flex-shrink-0" style={{ color: TAG_COLORS[g.type] }}>
+                      {tagPrefix(g.type)}{it.name}
+                    </span>
+                    {it.description && (
+                      <span className="text-[11px] font-mono text-muted/50 truncate">{it.description}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Slash command popup */}
       {showCmds && filteredCmds.length > 0 && (
         <div className="absolute bottom-full left-3 right-3 mb-2 glass rounded-xl border border-white/10 shadow-2xl overflow-hidden z-20">
@@ -441,7 +520,7 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
 
           {/* Slash commands */}
           <button
-            onClick={() => { setShowCmds(s => !s); setCmdFilter('') }}
+            onClick={() => { setShowCmds(s => !s); setCmdFilter(''); setShowLib(false) }}
             className={cn(
               'p-1.5 cursor-pointer transition-colors rounded-lg hover:bg-surface2/50',
               showCmds ? 'text-accent' : 'text-muted hover:text-text',
@@ -449,6 +528,18 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
             title="Slash commands"
           >
             <Slash className="w-4 h-4" />
+          </button>
+
+          {/* Library picker — insert skill / agent / plugin */}
+          <button
+            onClick={() => { setShowLib(s => !s); setLibFilter(''); setShowCmds(false) }}
+            className={cn(
+              'p-1.5 cursor-pointer transition-colors rounded-lg hover:bg-surface2/50',
+              showLib ? 'text-accent' : 'text-muted hover:text-text',
+            )}
+            title="Insert skill / agent / plugin"
+          >
+            <Boxes className="w-4 h-4" />
           </button>
 
           {/* Enter ↔ newline toggle */}
