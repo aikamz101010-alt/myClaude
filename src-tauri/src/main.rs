@@ -10,6 +10,11 @@ mod state;
 
 use commands::{
     agent::{interrupt_chat, respond_permission, send_chat_stream},
+    avatar::{list_voices, synthesize_edge, synthesize_speech},
+    dictation::{
+        dictation_download_model, dictation_model_status, dictation_start, dictation_stop,
+        Dictation,
+    },
     session::{get_session_history, list_project_sessions},
     library::{
         add_marketplace, auth_login, auth_logout, auth_status_json, auth_submit_code,
@@ -119,6 +124,10 @@ fn is_relevant_key(k: &str) -> bool {
 }
 
 fn main() {
+    // Install a process-level rustls crypto provider (required by msedge-tts /
+    // Edge neural TTS over TLS WebSocket).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let app_state = AppState::new();
     let pty_manager = PtyManager::new();
     let auth_manager = AuthManager::new();
@@ -135,6 +144,7 @@ fn main() {
         .manage(pty_manager)
         .manage(auth_manager)
         .manage(sidecar_manager.clone())
+        .manage(std::sync::Arc::new(Dictation::new()))
         .setup(move |_app| {
             // Capture shell env (ANTHROPIC_API_KEY etc.)
             let shell_env = capture_shell_env();
@@ -205,6 +215,15 @@ fn main() {
             list_node_versions,
             get_node_setting,
             set_node_path,
+            // Voice synthesis for the talking avatar
+            synthesize_speech,
+            synthesize_edge,
+            list_voices,
+            // Speech-to-text (mic input, cross-platform Whisper)
+            dictation_start,
+            dictation_stop,
+            dictation_model_status,
+            dictation_download_model,
             // PTY terminal (real embedded claude CLI)
             start_pty,
             write_pty,

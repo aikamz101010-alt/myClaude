@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { cn } from '@/lib/utils'
 import { useLibraryStore, type SkillItem } from '@/store/libraryStore'
 import { buildClassifier, tagPrefix, useTagColors, type TagType } from '@/lib/tagColors'
@@ -46,31 +48,11 @@ const DEFAULT_COMMANDS = [
   'cost', 'help', 'model', 'agents', 'mcp', 'memory', 'resume',
 ]
 
-// ── Voice (Web Speech API) ────────────────────────────────────────
-type SpeechRecognitionLike = {
-  lang: string
-  continuous: boolean
-  interimResults: boolean
-  start: () => void
-  stop: () => void
-  onresult: ((e: any) => void) | null
-  onerror: ((e: any) => void) | null
-  onend: (() => void) | null
-}
-
-function getSpeechRecognition(): SpeechRecognitionLike | null {
-  const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-  if (!SR) return null
-  try {
-    const r = new SR() as SpeechRecognitionLike
-    r.lang = 'id-ID'
-    r.continuous = true
-    r.interimResults = true
-    return r
-  } catch {
-    return null
-  }
-}
+// ── Voice (native cross-platform speech-to-text via Whisper) ───────
+// The browser SpeechRecognition API is unavailable in Tauri's webviews
+// (WKWebView / WebView2 / WebKitGTK), so dictation is handled natively in
+// Rust (cpal capture + whisper.cpp). Language 'id' = Bahasa Indonesia.
+type ModelState = 'unknown' | 'missing' | 'ready' | 'downloading'
 
 export function ChatInput({ onSend, onStop, streaming, slashCommands, model = '', onModelChange, permissionMode = 'default', onPermissionModeChange, yolo = false, onYoloChange, injectText, onInjectConsumed }: Props) {
   const [text, setText]           = useState('')
@@ -83,16 +65,16 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
   const [showLib, setShowLib]     = useState(false)
   const [libFilter, setLibFilter] = useState('')
   const [listening, setListening] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
+  const [modelState, setModelState] = useState<ModelState>('unknown')
+  const [downloadPct, setDownloadPct] = useState(0)
   const [enterNewline, setEnterNewline] = useState(false)  // toggle: Enter = newline
-  const [voiceSupported] = useState(() => getSpeechRecognition() !== null)
 
   const currentModel = MODELS.find(m => m.value === model) ?? MODELS[0]
   const currentPerm = PERMISSION_MODES.find(p => p.value === permissionMode) ?? PERMISSION_MODES[0]
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const backdropRef = useRef<HTMLDivElement>(null)
-  const recogRef    = useRef<SpeechRecognitionLike | null>(null)
-  const baseTextRef = useRef('')   // text before voice started
 
   // Classify /name & @name tokens by library type → color
   const { items } = useLibraryStore()
@@ -221,31 +203,62 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
     if (dropped.length) addFiles(dropped)
   }
 
-  // ── Voice ─────────────────────────────────────────────────────
-  const toggleVoice = () => {
+  // ── Voice (native Whisper dictation) ──────────────────────────
+  // Check whether the Whisper model is present on mount.
+  useEffect(() => {
+    invoke<{ present: boolean }>('dictation_model_status')
+      .then(s => setModelState(s.present ? 'ready' : 'missing'))
+      .catch(() => setModelState('missing'))
+  }, [])
+
+  // Listen to model download progress.
+  useEffect(() => {
+    const un = listen<{ percent: number }>('dictation:download', e => setDownloadPct(e.payload.percent))
+    return () => { un.then(f => f()) }
+  }, [])
+
+  const downloadModel = async () => {
+    setModelState('downloading')
+    setDownloadPct(0)
+    try {
+      await invoke('dictation_download_model')
+      setModelState('ready')
+    } catch {
+      setModelState('missing')
+    }
+  }
+
+  const toggleVoice = async () => {
+    if (transcribing) return
+
     if (listening) {
-      recogRef.current?.stop()
+      // Stop → transcribe → append to the input.
+      setListening(false)
+      setTranscribing(true)
+      try {
+        const result = await invoke<string>('dictation_stop', { lang: 'id' })
+        const t = (result ?? '').trim()
+        if (t) setText(prev => (prev.trim() ? prev.replace(/\s*$/, ' ') : '') + t)
+      } catch (err) {
+        console.warn('[dictation] stop failed:', err)
+      } finally {
+        setTranscribing(false)
+        textareaRef.current?.focus()
+      }
       return
     }
-    const recog = getSpeechRecognition()
-    if (!recog) return
-    recogRef.current = recog
-    baseTextRef.current = text ? text + ' ' : ''
 
-    recog.onresult = (e: any) => {
-      let transcript = ''
-      for (let i = 0; i < e.results.length; i++) {
-        transcript += e.results[i][0].transcript
-      }
-      setText(baseTextRef.current + transcript)
+    // Not listening yet.
+    if (modelState === 'downloading') return
+    if (modelState !== 'ready') {
+      await downloadModel()
+      return // user taps again to start recording once the model is ready
     }
-    recog.onerror = () => setListening(false)
-    recog.onend = () => setListening(false)
-
     try {
-      recog.start()
+      await invoke('dictation_start')
       setListening(true)
-    } catch {
+    } catch (err) {
+      console.warn('[dictation] start failed:', err)
       setListening(false)
     }
   }
@@ -606,19 +619,31 @@ export function ChatInput({ onSend, onStop, streaming, slashCommands, model = ''
             <span className="text-xs font-mono">{currentModel.label}</span>
           </button>
 
-          {/* Voice */}
-          {voiceSupported && (
-            <button
-              onClick={toggleVoice}
-              className={cn(
-                'p-1.5 cursor-pointer transition-colors rounded-lg hover:bg-surface2/50',
-                listening ? 'text-error animate-pulse' : 'text-muted hover:text-text',
-              )}
-              title={listening ? 'Stop recording' : 'Voice input (Bahasa Indonesia)'}
-            >
+          {/* Voice (native Whisper dictation, cross-platform) */}
+          <button
+            onClick={toggleVoice}
+            disabled={transcribing || modelState === 'downloading'}
+            className={cn(
+              'p-1.5 rounded-lg hover:bg-surface2/50 flex items-center gap-1 transition-colors',
+              listening ? 'text-error animate-pulse' : 'text-muted hover:text-text',
+              (transcribing || modelState === 'downloading') ? 'opacity-70 cursor-default' : 'cursor-pointer',
+            )}
+            title={
+              modelState === 'missing' ? 'Unduh model suara (~148 MB) untuk input mic'
+              : modelState === 'downloading' ? `Mengunduh model suara… ${downloadPct}%`
+              : transcribing ? 'Mentranskrip…'
+              : listening ? 'Berhenti & masukkan (Bahasa Indonesia)'
+              : 'Input suara — Bahasa Indonesia'
+            }
+          >
+            {modelState === 'downloading' ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /><span className="text-[10px] font-mono">{downloadPct}%</span></>
+            ) : transcribing ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
               <Mic className="w-4 h-4" />
-            </button>
-          )}
+            )}
+          </button>
 
           {/* Submit / Stop */}
           {streaming ? (

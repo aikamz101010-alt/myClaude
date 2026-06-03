@@ -7,11 +7,14 @@ import { ContractEditor, type ContractEditorHandle } from '@/components/project/
 import { ContractPanel } from '@/components/project/ContractPanel'
 import { LibraryPanel } from '@/components/library/LibraryPanel'
 import { AddFromURL } from '@/components/library/AddFromURL'
+import { Avatar3DView } from '@/components/project/Avatar3DView'
+import { CharacterView } from '@/components/project/CharacterView'
 import { useSessionStore } from '@/store/sessionStore'
 import { useLibraryStore } from '@/store/libraryStore'
+import { useAvatarStore } from '@/store/avatarStore'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
 import { cn } from '@/lib/utils'
-import { MessageSquare, Terminal, FileText, ArrowLeft, Circle, Plus, X, Folder } from 'lucide-react'
+import { MessageSquare, Terminal, FileText, ArrowLeft, Circle, Plus, X, Folder, Bot, PersonStanding } from 'lucide-react'
 import type { Project } from '@/store/projectStore'
 import type { SkillItem } from '@/store/libraryStore'
 
@@ -20,7 +23,7 @@ interface Props {
   onBack: () => void
 }
 
-type Tab = 'chat' | 'terminal' | 'contract'
+type Tab = 'chat' | 'terminal' | 'contract' | 'character'
 
 const BUILTIN_COMMANDS = ['init', 'review', 'security-review', 'compact', 'clear', 'context', 'cost', 'help', 'model', 'agents', 'mcp', 'resume']
 
@@ -48,6 +51,8 @@ export function ProjectWindow({ project, onBack }: Props) {
 
   const { ptyStatus, chatsByProject, chats, createChat, closeChat, sendMessageStream } = useSessionStore()
   const { items } = useLibraryStore()
+  const avatarEnabled = useAvatarStore(s => s.enabled)
+  const toggleAvatar = useAvatarStore(s => s.toggleEnabled)
   const ptyRunning = ptyStatus[project.id] === 'running'
 
   // Slash commands = skills + builtin
@@ -111,9 +116,10 @@ export function ProjectWindow({ project, onBack }: Props) {
   }, [createChat, project.id, project.path, sendMessageStream])
 
   const tabs: { key: Tab; icon: typeof MessageSquare; label: string; dot?: boolean }[] = [
-    { key: 'chat',     icon: MessageSquare, label: 'Chat'     },
-    { key: 'terminal', icon: Terminal,      label: 'Terminal', dot: ptyRunning },
-    { key: 'contract', icon: FileText,      label: 'Contract' },
+    { key: 'chat',      icon: MessageSquare,  label: 'Chat'      },
+    { key: 'terminal',  icon: Terminal,       label: 'Terminal', dot: ptyRunning },
+    { key: 'character', icon: PersonStanding, label: 'Character' },
+    { key: 'contract',  icon: FileText,       label: 'Contract'  },
   ]
 
   return (
@@ -142,6 +148,12 @@ export function ProjectWindow({ project, onBack }: Props) {
               ))}
             </div>
             <div className="w-px h-4 bg-white/10" />
+            <button onClick={toggleAvatar}
+              title={avatarEnabled ? 'Hide talking avatar' : 'Show talking avatar'}
+              className={cn('p-1 rounded-lg cursor-pointer transition-colors',
+                avatarEnabled ? 'text-accent' : 'text-muted hover:text-text')}>
+              <Bot className="w-3.5 h-3.5" />
+            </button>
             <ThemeToggle />
           </div>
         </div>
@@ -225,6 +237,11 @@ export function ProjectWindow({ project, onBack }: Props) {
                 </div>
                 {/* File editor (when a file tab is active) */}
                 {activeFile && <FileEditor key={activeFile} path={activeFile} />}
+
+                {/* Talking VRM avatar — floats over the chat, narrates replies */}
+                {tab === 'chat' && avatarEnabled && !activeFile && (
+                  <Avatar3DView chatId={activeChatId} onClose={() => toggleAvatar()} />
+                )}
               </div>
             </div>
 
@@ -232,6 +249,13 @@ export function ProjectWindow({ project, onBack }: Props) {
             <div className={cn('flex-1 overflow-hidden', tab === 'terminal' ? 'block' : 'hidden')}>
               <TerminalView projectId={project.id} workingDir={project.path} autoStart={tab === 'terminal'} />
             </div>
+
+            {/* Character panel — full-body talking avatar with synced subtitles */}
+            {tab === 'character' && (
+              <div className="flex-1 overflow-hidden">
+                <CharacterView chatId={activeChatId} />
+              </div>
+            )}
 
             {tab === 'contract' && (
               <div className="flex-1 overflow-hidden">
@@ -242,7 +266,9 @@ export function ProjectWindow({ project, onBack }: Props) {
 
           {tab === 'chat'
             ? <ContractPanel contractPath={project.contract_path} activeChatId={activeChatId} />
-            : <LibraryPanel onAddFromURL={() => setShowAddURL(true)} onItemClick={tab === 'contract' ? handleAddToContract : undefined} />}
+            : tab === 'character'
+              ? null
+              : <LibraryPanel onAddFromURL={() => setShowAddURL(true)} onItemClick={tab === 'contract' ? handleAddToContract : undefined} />}
         </div>
 
         {showAddURL && <AddFromURL onClose={() => setShowAddURL(false)} />}
