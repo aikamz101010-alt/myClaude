@@ -30,6 +30,8 @@ export function AvatarVoiceSettings() {
   const setShowLog = useAvatarStore(s => s.setShowLog)
   const interactive = useAvatarStore(s => s.interactive)
   const setInteractive = useAvatarStore(s => s.setInteractive)
+  const liveAssistant = useAvatarStore(s => s.liveAssistant)
+  const setLiveAssistant = useAvatarStore(s => s.setLiveAssistant)
 
   const [model, setModel] = useState<ModelState>('unknown')
   const [pct, setPct] = useState(0)
@@ -60,6 +62,20 @@ export function AvatarVoiceSettings() {
       <p className="text-xs font-mono font-semibold text-muted flex items-center gap-1.5">
         <Bot className="w-3.5 h-3.5 text-accent" /> Avatar &amp; Suara
       </p>
+
+      {/* Live Assistant (subagent control) */}
+      <button onClick={() => setLiveAssistant(!liveAssistant)}
+        className="w-full flex items-center justify-between cursor-pointer text-left">
+        <span className="text-[11px] text-text pr-2">
+          Live Assistant (subagent)
+          <span className="block text-[10px] text-muted/60">
+            Subagent di session terpisah mengendalikan ekspresi &amp; gestur (eksperimental)
+          </span>
+        </span>
+        <span className={cn('relative w-8 h-4 rounded-full transition-colors flex-shrink-0', liveAssistant ? 'bg-accent' : 'bg-white/15')}>
+          <span className={cn('absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all', liveAssistant ? 'left-4' : 'left-0.5')} />
+        </span>
+      </button>
 
       {/* Voice mode */}
       <div>

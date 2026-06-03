@@ -1,6 +1,13 @@
 import { invoke } from '@tauri-apps/api/core'
 import { lipSync } from './lipsync'
-import { useAvatarStore } from '@/store/avatarStore'
+import { useAvatarStore, DEFAULT_VRM_URL } from '@/store/avatarStore'
+
+/** Effective voice gender: the built-in character is locked to a female voice;
+ * a custom (uploaded) VRM honors the chosen gender. */
+function effectiveGender(): 'woman' | 'man' {
+  const { voiceGender, vrmUrl } = useAvatarStore.getState()
+  return vrmUrl === DEFAULT_VRM_URL ? 'woman' : voiceGender
+}
 
 /**
  * Strip markdown / code / urls down to plain prose suitable for TTS. By default
@@ -51,14 +58,14 @@ const LOCAL_VOICE: Record<'woman' | 'man', Record<'id' | 'en' | 'multi', string>
 
 /** macOS `say` (offline) synthesis → base64 WAV. */
 function synthLocal(text: string): Promise<string> {
-  const { rate, voiceLang, voiceGender } = useAvatarStore.getState()
-  return invoke<string>('synthesize_speech', { text, voice: LOCAL_VOICE[voiceGender][voiceLang], rate: rate || null })
+  const { rate, voiceLang } = useAvatarStore.getState()
+  return invoke<string>('synthesize_speech', { text, voice: LOCAL_VOICE[effectiveGender()][voiceLang], rate: rate || null })
 }
 
 /** Microsoft Edge neural synthesis (free, realistic, needs internet) → base64 MP3. */
 function synthEdge(text: string): Promise<string> {
-  const { voiceLang, voiceGender } = useAvatarStore.getState()
-  return invoke<string>('synthesize_edge', { text, voice: EDGE_VOICE[voiceGender][voiceLang], rate: null })
+  const { voiceLang } = useAvatarStore.getState()
+  return invoke<string>('synthesize_edge', { text, voice: EDGE_VOICE[effectiveGender()][voiceLang], rate: null })
 }
 
 /** Synthesize one piece of text via the active provider (Edge → local fallback). */

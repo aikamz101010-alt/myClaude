@@ -3,14 +3,33 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { VRM, VRMLoaderPlugin, VRMUtils, VRMExpressionPresetName } from '@pixiv/three-vrm'
 import { Volume2, VolumeX, Loader2, Bot, Settings, X } from 'lucide-react'
-import { useSessionStore } from '@/store/sessionStore'
+import { useSessionStore, type Message } from '@/store/sessionStore'
 import { useAvatarStore } from '@/store/avatarStore'
 import { lipSync } from '@/lib/lipsync'
 import { enqueueSpeech, resetNarration, markNarrated, stopSpeaking, sanitizeForSpeech } from '@/lib/speak'
 import { cn } from '@/lib/utils'
 import { ChatInput, type AttachedFile } from './ChatInput'
 import { AvatarVoiceSettings } from '@/components/settings/AvatarVoiceSettings'
-import { STANDBY_POSES, nextStandbyPose, SPEAK_GESTURES, nextSpeakGesture } from '@/lib/standbyPoses'
+import { STANDBY_POSES, nextStandbyPose, SPEAK_GESTURES, nextSpeakGesture, type StandbyPose } from '@/lib/standbyPoses'
+import { runDirector, ensureLiveAssistantAgent, type Emotion } from '@/lib/liveAssistant'
+
+// A live-assistant performance cue applied for a short window.
+interface ActiveCue { emotion: Emotion; gesture: string; until: number }
+
+// Look up a gesture/pose by name (for live-assistant gesture cues).
+const POSE_BY_NAME = new Map<string, StandbyPose>(
+  [...STANDBY_POSES, ...SPEAK_GESTURES].map(p => [p.name, p]),
+)
+// Emotion → VRM expression preset.
+const EMO_PRESET: Record<Emotion, VRMExpressionPresetName | null> = {
+  neutral: null,
+  happy: VRMExpressionPresetName.Happy,
+  sad: VRMExpressionPresetName.Sad,
+  angry: VRMExpressionPresetName.Angry,
+  surprised: VRMExpressionPresetName.Surprised,
+  relaxed: VRMExpressionPresetName.Relaxed,
+}
+const EMOTION_KEYS: Emotion[] = ['happy', 'sad', 'angry', 'surprised', 'relaxed']
 
 interface Props {
   chatId: string | null
@@ -24,12 +43,13 @@ type Zoom = 'full' | 'three' | 'half' | 'head'
 
 // ── Vanilla three.js VRM stage with walking, gestures & zoom framing ──────────
 
-function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus }: {
+function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, cueRef, onStatus }: {
   url: string
   zoom: Zoom
   thinkingRef: MutableRefObject<boolean>
   activeRef: MutableRefObject<boolean>
   interactiveRef: MutableRefObject<boolean>
+  cueRef: MutableRefObject<ActiveCue | null>
   onStatus: (s: Status) => void
 }) {
   const mountRef = useRef<HTMLDivElement>(null)
@@ -219,7 +239,15 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
         if (phase2 > 6.4) blink = Math.max(blink, Math.sin(((phase2 - 6.4) / 0.1) * Math.PI))
         em?.setValue(VRMExpressionPresetName.Blink, blink)
         em?.setValue(VRMExpressionPresetName.Aa, thinking ? 0 : lipSync.mouth())
-        em?.setValue(VRMExpressionPresetName.Happy, speaking ? 0.3 : thinking ? 0.05 : 0.12)
+        // Emotion: a live-assistant cue overrides the default subtle smile.
+        const cueNow = cueRef.current
+        const cueActive = !!cueNow && Date.now() < cueNow.until
+        const emo: Emotion = cueActive ? cueNow!.emotion : 'happy'
+        const emoLevel = cueActive ? 0.7 : speaking ? 0.3 : thinking ? 0.05 : 0.12
+        for (const k of EMOTION_KEYS) {
+          const preset = EMO_PRESET[k]
+          if (preset) { try { em?.setValue(preset, emo === k ? emoLevel : 0) } catch { /* missing expr */ } }
+        }
 
         // ── Eyes: lively gaze. Thinking → steady up-aside ponder; otherwise the
         // eyes dart to a new target every 1-3s (saccade) then hold. ──
@@ -298,6 +326,15 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
           lUAz = p.lUAz + breath; lUAx = p.lUAx
           rUAz = p.rUAz - breath; rUAx = p.rUAx
           lLAz = p.lLAz; rLAz = p.rLAz
+        }
+        // Live-assistant gesture cue: hold the chosen gesture while active.
+        if (cueActive && cueNow!.gesture && cueNow!.gesture !== 'none') {
+          const gp = POSE_BY_NAME.get(cueNow!.gesture)
+          if (gp) {
+            lUAz = gp.lUAz; lUAx = gp.lUAx; rUAz = gp.rUAz; rUAx = gp.rUAx
+            lLAz = gp.lLAz; rLAz = gp.rLAz
+            waveSide = gp.wave
+          }
         }
         // Faster lerp while speaking so the gesticulation is clearly visible.
         const armK = speaking ? 0.30 : 0.16
@@ -523,6 +560,38 @@ function Transcript({ chatId }: { chatId: string | null }) {
 
 // ── Panel ─────────────────────────────────────────────────────────────────────
 
+// ── Live Assistant: a separate-session director picks emotion+gesture per reply ─
+function useLiveAssistant(chatId: string | null, active: boolean, cueRef: MutableRefObject<ActiveCue | null>) {
+  const status = useSessionStore(s => (chatId ? s.chats[chatId]?.status : undefined))
+  const messages = useSessionStore(s => (chatId ? s.chats[chatId]?.messages : undefined))
+  const workingDir = useSessionStore(s => (chatId ? s.chats[chatId]?.workingDir : undefined))
+  const liveAssistant = useAvatarStore(s => s.liveAssistant)
+  const lastId = useRef<string | null>(null)
+
+  // (Re)generate the local agent file whenever Live Assistant is enabled.
+  useEffect(() => {
+    if (liveAssistant && active && workingDir) void ensureLiveAssistantAgent(workingDir)
+  }, [liveAssistant, active, workingDir])
+
+  useEffect(() => {
+    const msgs = messages
+    if (!active || !liveAssistant || status !== 'idle' || !msgs?.length) return
+    let msg: Message | undefined
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'assistant') { msg = msgs[i]; break }
+    }
+    if (!msg || msg.id === lastId.current) return
+    lastId.current = msg.id
+    const text = (msg.blocks ?? [])
+      .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+      .map(b => b.text).join(' ').trim() || msg.content
+    if (!text) return
+    void runDirector(text, workingDir || '.').then(cue => {
+      if (cue) cueRef.current = { ...cue, until: Date.now() + 8000 }
+    })
+  }, [status, messages, active, liveAssistant]) // eslint-disable-line react-hooks/exhaustive-deps
+}
+
 export function CharacterView({ chatId, slashCommands, active = true }: Props) {
   const vrmUrl = useAvatarStore(s => s.vrmUrl)
   const autoSpeak = useAvatarStore(s => s.autoSpeak)
@@ -556,8 +625,10 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
   activeRef.current = active
   const interactiveRef = useRef(interactive)
   interactiveRef.current = interactive
+  const cueRef = useRef<ActiveCue | null>(null)
 
   useStreamNarration(chatId, active)
+  useLiveAssistant(chatId, active, cueRef)
 
   // Stop narration when leaving the panel; also stop if the tab is hidden.
   useEffect(() => { if (!active) resetNarration() }, [active])
@@ -585,7 +656,7 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
         {/* Stage area */}
         <div className="relative flex-1 overflow-hidden bg-gradient-to-b from-surface2/30 via-bg to-bg">
           {/* 3D stage */}
-          <VrmStage url={vrmUrl} zoom={zoom} thinkingRef={thinkingRef} activeRef={activeRef} interactiveRef={interactiveRef} onStatus={setStatus} />
+          <VrmStage url={vrmUrl} zoom={zoom} thinkingRef={thinkingRef} activeRef={activeRef} interactiveRef={interactiveRef} cueRef={cueRef} onStatus={setStatus} />
 
           {/* Synced subtitle box (left / right of the character) */}
           <Subtitle side={side} />

@@ -18,6 +18,7 @@ import type { SkillItem } from '@/store/libraryStore'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
 import { InstallModal } from '@/components/library/InstallModal'
 import { useTagColors, type TagType } from '@/lib/tagColors'
+import { VirtualAssistantSettings } from '@/components/settings/VirtualAssistantSettings'
 
 // ── Project Modal (New + Open) ───────────────────────────────────
 type ModalMode = 'new' | 'open'
@@ -200,7 +201,45 @@ const PROFILE_PRESETS = [
   '~/.profile',
 ]
 
+// A readonly login URL shown as a form: copy + open-in-browser. Reused for the
+// main OAuth link and the "if the browser didn't open" fallback link.
+function LoginLinkForm({ url, label }: { url: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { /* clipboard unavailable */ }
+  }
+  return (
+    <div className="mt-3 p-2.5 rounded-lg bg-surface border border-accent/20">
+      <p className="text-xs font-mono font-semibold text-accent mb-1.5">{label}</p>
+      <div className="flex items-center gap-1.5">
+        <input
+          readOnly
+          value={url}
+          onFocus={e => e.currentTarget.select()}
+          className="flex-1 min-w-0 bg-surface2 rounded-md px-2 py-1.5 text-xs font-mono text-muted truncate outline-none border border-white/5"
+        />
+        <button onClick={copy} title="Copy link"
+          className="flex items-center gap-1 px-2 py-1.5 rounded-md text-xs font-mono bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors flex-shrink-0">
+          {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+        <button onClick={() => openUrl(url)} title="Open in browser"
+          className="flex items-center justify-center px-2 py-1.5 rounded-md text-xs font-mono bg-surface2 text-text hover:bg-surface border border-white/10 cursor-pointer transition-colors flex-shrink-0">
+          <ExternalLink className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+type SettingsTab = 'account' | 'general' | 'assistant'
+
 function SettingsModal({ onClose }: { onClose: () => void }) {
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('account')
   const { claudeBinary: claudeBinaryForDisplay, load: reloadLibrary } = useLibraryStore()
 
   // API-key save location
@@ -220,7 +259,6 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [loggingIn, setLoggingIn] = useState(false)
   const [loginLog, setLoginLog] = useState<string[]>([])
   const [loginUrl, setLoginUrl] = useState('')      // OAuth login URL from the CLI
-  const [urlCopied, setUrlCopied] = useState(false)
   const [authCode, setAuthCode] = useState('')      // code pasted back from the browser
   const [submittingCode, setSubmittingCode] = useState(false)
 
@@ -244,7 +282,6 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     setLoginLog([])
     setLoginUrl('')
     setAuthCode('')
-    setUrlCopied(false)
     const unlistenEvt = await listen<string>('auth:event', e => {
       setLoginLog(prev => [...prev, e.payload].slice(-8))
     })
@@ -272,16 +309,6 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       setLoggingIn(false)
       setFeedbackTemp(`❌ ${String(err)}`)
     }
-  }
-
-  // Copy the OAuth login URL to the clipboard
-  const handleCopyUrl = async () => {
-    if (!loginUrl) return
-    try {
-      await navigator.clipboard.writeText(loginUrl)
-      setUrlCopied(true)
-      setTimeout(() => setUrlCopied(false), 1500)
-    } catch { setFeedbackTemp('❌ Could not copy') }
   }
 
   // Send the pasted authorization code back to the waiting CLI
@@ -414,14 +441,24 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     setFeedbackTemp('🔄 Auth re-checked')
   }
 
+  // The CLI log may print an "if the browser didn't open" fallback URL — surface
+  // it as its own form (like the main login link) rather than buried in the log.
+  const fallbackUrl = (() => {
+    for (const line of loginLog) {
+      const m = line.match(/https?:\/\/[^\s'"]+/)
+      if (m && m[0] !== loginUrl) return m[0]
+    }
+    return ''
+  })()
+
   return (
     <div
       className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="glass rounded-2xl w-[500px] p-5 border border-white/10 shadow-2xl animate-slide-in">
+      <div className="glass rounded-2xl w-[500px] max-h-[85vh] flex flex-col border border-white/10 shadow-2xl animate-slide-in overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center justify-between px-5 pt-4 pb-3 flex-shrink-0">
           <div className="flex items-center gap-2">
             <Settings className="w-4 h-4 text-accent" />
             <h2 className="text-sm font-mono font-bold text-text">Settings</h2>
@@ -431,6 +468,24 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
+        {/* Section tabs */}
+        <div className="flex items-center gap-1 px-5 pb-3 flex-shrink-0">
+          {([['account', 'Account'], ['general', 'General'], ['assistant', 'Virtual Assistant']] as [SettingsTab, string][]).map(([k, l]) => (
+            <button key={k} onClick={() => setSettingsTab(k)}
+              className={cn('flex-1 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors',
+                settingsTab === k ? 'bg-surface2 text-text' : 'text-muted hover:text-text')}>
+              {l}
+            </button>
+          ))}
+        </div>
+
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-4">
+
+        {/* ── Virtual Assistant ───────────────────── */}
+        {settingsTab === 'assistant' && <VirtualAssistantSettings />}
+
+        {settingsTab === 'account' && (<>
         {/* ── Auth Status ─────────────────────────── */}
         <div className="mb-4 p-3 rounded-xl bg-surface2/50 border border-white/5">
           <div className="flex items-center justify-between mb-2">
@@ -497,28 +552,12 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                 <LogIn className="w-3.5 h-3.5" /> API billing
               </button>
             </div>
-            {/* OAuth login URL — shown + copyable, opens automatically */}
+            {/* OAuth login link + fallback link as forms; opens automatically too */}
             {loginUrl && (
               <div className="mt-3 p-2.5 rounded-lg bg-surface border border-accent/20">
-                <p className="text-xs font-mono font-semibold text-accent mb-1.5">Login link</p>
-                <div className="flex items-center gap-1.5">
-                  <input
-                    readOnly
-                    value={loginUrl}
-                    onFocus={e => e.currentTarget.select()}
-                    className="flex-1 min-w-0 bg-surface2 rounded-md px-2 py-1.5 text-xs font-mono text-muted truncate outline-none border border-white/5"
-                  />
-                  <button onClick={handleCopyUrl} title="Copy link"
-                    className="flex items-center gap-1 px-2 py-1.5 rounded-md text-xs font-mono bg-accent text-bg hover:bg-accent/90 cursor-pointer transition-colors flex-shrink-0">
-                    {urlCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    {urlCopied ? 'Copied' : 'Copy'}
-                  </button>
-                  <button onClick={() => openUrl(loginUrl)} title="Open in browser"
-                    className="flex items-center justify-center px-2 py-1.5 rounded-md text-xs font-mono bg-surface2 text-text hover:bg-surface border border-white/10 cursor-pointer transition-colors flex-shrink-0">
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <p className="text-xs font-mono text-muted/60 mt-2 mb-1">
+                <LoginLinkForm url={loginUrl} label="Login link" />
+                {fallbackUrl && <LoginLinkForm url={fallbackUrl} label="If the browser didn't open, use this link" />}
+                <p className="text-xs font-mono text-muted/60 mt-3 mb-1">
                   Authorize in the browser, copy the code shown, paste it here:
                 </p>
                 <div className="flex items-center gap-1.5">
@@ -592,13 +631,15 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         )}
+        </>)}
 
         {feedback && (
-          <p className="text-xs font-mono mb-3 text-center" style={{ color: feedback.startsWith('✅') ? '#22C55E' : feedback.startsWith('❌') ? '#EF4444' : '#94A3B8' }}>
+          <p className="text-xs font-mono text-center" style={{ color: feedback.startsWith('✅') ? '#22C55E' : feedback.startsWith('❌') ? '#EF4444' : '#94A3B8' }}>
             {feedback}
           </p>
         )}
 
+        {settingsTab === 'general' && (<>
         {/* ── App Updates ─────────────────────────── */}
         <div className="mb-4 p-3 rounded-xl bg-surface2/50 border border-white/5">
           <div className="flex items-center justify-between mb-2">
@@ -696,6 +737,9 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
           <p className="text-xs font-mono text-text break-all">
             {claudeBinaryForDisplay ?? '❌ Not detected — install: npm i -g @anthropic-ai/claude-code'}
           </p>
+        </div>
+        </>)}
+
         </div>
       </div>
     </div>

@@ -25,7 +25,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://github.com https://objects.githubusercontent.com ipc: http://ipc.localhost"
+      "assetProtocol": { "enable": true, "scope": ["**"] },
+      "csp": "default-src 'self' asset: http://asset.localhost; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost blob:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://github.com https://objects.githubusercontent.com ipc: http://ipc.localhost asset: http://asset.localhost"
     }
   },
   "plugins": {
