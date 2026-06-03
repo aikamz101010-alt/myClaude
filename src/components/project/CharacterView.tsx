@@ -139,7 +139,9 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
       const rect = renderer.domElement.getBoundingClientRect()
       const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1   // -1 (left) .. 1 (right)
       const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1   // -1 (top) .. 1 (bottom)
-      lookYaw = THREE.MathUtils.clamp(-nx, -1, 1) * 0.8           // turn head toward the clicked side
+      // head.rotation.y > 0 turns the face toward screen-right, so use +nx to
+      // look toward the side the cursor is actually on.
+      lookYaw = THREE.MathUtils.clamp(nx, -1, 1) * 0.8           // turn head toward the clicked side
       lookPitch = THREE.MathUtils.clamp(ny, -1, 1) * 0.5         // tilt up/down toward it
       lookUntil = clock.elapsedTime + 3.5                        // hold the glance briefly
     }
@@ -150,7 +152,7 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
       const rect = renderer.domElement.getBoundingClientRect()
       const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1
       const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1
-      hoverYaw = THREE.MathUtils.clamp(-nx, -1, 1) * 0.5    // softer than a double-click glance
+      hoverYaw = THREE.MathUtils.clamp(nx, -1, 1) * 0.5    // +nx: follow the cursor's actual side
       hoverPitch = THREE.MathUtils.clamp(ny, -1, 1) * 0.32
       hovering = true
     }

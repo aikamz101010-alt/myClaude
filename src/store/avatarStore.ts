@@ -26,6 +26,12 @@ interface AvatarStore {
   narrationLimit: number    // max characters to narrate; 0 = unlimited (default)
   captionHideSec: number    // auto-hide subtitle this many seconds after speech ends; 0 = keep until next reply
 
+  // ── Virtual assistant identity (persisted) ──
+  assistantName: string     // shown as the project tab name (default 'Claudia')
+  persona: string           // free-text persona; folded into the live-assistant agent prompt
+  voiceGender: 'woman' | 'man' // selects male/female neural + offline voices
+  liveAssistant: boolean    // ON → a separate-session subagent drives the character (default OFF)
+
   setEnabled: (v: boolean) => void
   toggleEnabled: () => void
   setAutoSpeak: (v: boolean) => void
@@ -42,6 +48,10 @@ interface AvatarStore {
   setInteractive: (v: boolean) => void
   setNarrationLimit: (n: number) => void
   setCaptionHideSec: (n: number) => void
+  setAssistantName: (s: string) => void
+  setPersona: (s: string) => void
+  setVoiceGender: (g: 'woman' | 'man') => void
+  setLiveAssistant: (v: boolean) => void
 }
 
 export const DEFAULT_VRM_URL = '/avatar/character.vrm'
@@ -66,6 +76,11 @@ export const useAvatarStore = create<AvatarStore>()(
       narrationLimit: 0, // unlimited by default — narrate the whole reply
       captionHideSec: 0, // keep subtitle until the next reply by default
 
+      assistantName: 'Claudia', // existing default character
+      persona: '',
+      voiceGender: 'woman',
+      liveAssistant: false, // subagent control OFF by default
+
       setEnabled: v => set({ enabled: v }),
       toggleEnabled: () => set(s => ({ enabled: !s.enabled })),
       setAutoSpeak: v => set({ autoSpeak: v }),
@@ -82,6 +97,10 @@ export const useAvatarStore = create<AvatarStore>()(
       setInteractive: v => set({ interactive: v }),
       setNarrationLimit: n => set({ narrationLimit: n }),
       setCaptionHideSec: n => set({ captionHideSec: n }),
+      setAssistantName: s => set({ assistantName: s }),
+      setPersona: s => set({ persona: s }),
+      setVoiceGender: g => set({ voiceGender: g }),
+      setLiveAssistant: v => set({ liveAssistant: v }),
     }),
     { name: 'claudex-avatar' },
   ),

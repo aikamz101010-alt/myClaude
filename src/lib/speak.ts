@@ -30,31 +30,35 @@ export function sanitizeForSpeech(text: string, maxLen = Infinity): string {
   return t
 }
 
-// Per user preference: ALWAYS use a female voice — every option below is female,
-// so no language choice can switch the avatar to a male voice.
-// Edge (neural) voices, keyed by spoken-language setting:
-const EDGE_VOICE: Record<'id' | 'en' | 'multi', string> = {
-  id: 'id-ID-GadisNeural',              // native Indonesian
-  en: 'en-US-AriaNeural',               // native English
-  multi: 'en-US-AvaMultilingualNeural', // auto per-word (mixed ID/EN)
+// Voices keyed by gender → spoken-language. Edge (neural, online):
+const EDGE_VOICE: Record<'woman' | 'man', Record<'id' | 'en' | 'multi', string>> = {
+  woman: {
+    id: 'id-ID-GadisNeural',              // native Indonesian (female)
+    en: 'en-US-AriaNeural',               // native English (female)
+    multi: 'en-US-AvaMultilingualNeural', // auto per-word, mixed ID/EN (female)
+  },
+  man: {
+    id: 'id-ID-ArdiNeural',                  // native Indonesian (male)
+    en: 'en-US-GuyNeural',                   // native English (male)
+    multi: 'en-US-AndrewMultilingualNeural', // auto per-word, mixed ID/EN (male)
+  },
 }
-// macOS `say` (offline) voices, keyed by language ('multi' falls back to ID):
-const LOCAL_VOICE: Record<'id' | 'en' | 'multi', string> = {
-  id: 'Damayanti',  // id_ID, female
-  en: 'Samantha',   // en_US, female
-  multi: 'Damayanti',
+// macOS `say` (offline). Note: macOS has no male id_ID voice → Damayanti for ID.
+const LOCAL_VOICE: Record<'woman' | 'man', Record<'id' | 'en' | 'multi', string>> = {
+  woman: { id: 'Damayanti', en: 'Samantha', multi: 'Damayanti' },
+  man:   { id: 'Damayanti', en: 'Daniel',   multi: 'Damayanti' },
 }
 
 /** macOS `say` (offline) synthesis → base64 WAV. */
 function synthLocal(text: string): Promise<string> {
-  const { rate, voiceLang } = useAvatarStore.getState()
-  return invoke<string>('synthesize_speech', { text, voice: LOCAL_VOICE[voiceLang], rate: rate || null })
+  const { rate, voiceLang, voiceGender } = useAvatarStore.getState()
+  return invoke<string>('synthesize_speech', { text, voice: LOCAL_VOICE[voiceGender][voiceLang], rate: rate || null })
 }
 
 /** Microsoft Edge neural synthesis (free, realistic, needs internet) → base64 MP3. */
 function synthEdge(text: string): Promise<string> {
-  const { voiceLang } = useAvatarStore.getState()
-  return invoke<string>('synthesize_edge', { text, voice: EDGE_VOICE[voiceLang], rate: null })
+  const { voiceLang, voiceGender } = useAvatarStore.getState()
+  return invoke<string>('synthesize_edge', { text, voice: EDGE_VOICE[voiceGender][voiceLang], rate: null })
 }
 
 /** Synthesize one piece of text via the active provider (Edge → local fallback). */

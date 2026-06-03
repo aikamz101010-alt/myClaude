@@ -54,6 +54,7 @@ export function ProjectWindow({ project, onBack }: Props) {
   const { items } = useLibraryStore()
   const avatarEnabled = useAvatarStore(s => s.enabled)
   const toggleAvatar = useAvatarStore(s => s.toggleEnabled)
+  const assistantName = useAvatarStore(s => s.assistantName)
   const ptyRunning = ptyStatus[project.id] === 'running'
 
   // Slash commands = skills + builtin
@@ -123,7 +124,7 @@ export function ProjectWindow({ project, onBack }: Props) {
   const tabs: { key: Tab; icon: typeof MessageSquare; label: string; dot?: boolean }[] = [
     { key: 'chat',      icon: MessageSquare,  label: 'Chat'      },
     { key: 'terminal',  icon: Terminal,       label: 'Terminal', dot: ptyRunning },
-    { key: 'character', icon: PersonStanding, label: 'Character' },
+    { key: 'character', icon: PersonStanding, label: assistantName || 'Character' },
     { key: 'contract',  icon: FileText,       label: 'Contract'  },
   ]
 
