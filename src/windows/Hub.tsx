@@ -347,6 +347,37 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     }
   }
 
+  // ── Node.js runtime (Agent SDK sidecar) ──────────────────────
+  type NodeInfo = { path: string; version: string; major: number; recommended: boolean }
+  type NodeSetting = { selected: string | null; resolved: string | null; version: string | null }
+  const [nodeList, setNodeList] = useState<NodeInfo[]>([])
+  const [nodeSetting, setNodeSetting] = useState<NodeSetting | null>(null)
+  const [nodeBusy, setNodeBusy] = useState(false)
+
+  const loadNode = async () => {
+    try {
+      const [list, setting] = await Promise.all([
+        invoke<NodeInfo[]>('list_node_versions'),
+        invoke<NodeSetting>('get_node_setting'),
+      ])
+      setNodeList(list)
+      setNodeSetting(setting)
+    } catch { /* ignore */ }
+  }
+  useEffect(() => { loadNode() }, [])
+
+  const handleSelectNode = async (path: string | null) => {
+    setNodeBusy(true)
+    try {
+      const setting = await invoke<NodeSetting>('set_node_path', { path })
+      setNodeSetting(setting)
+    } catch (e) {
+      setFeedbackTemp(`❌ ${String(e)}`)
+    } finally {
+      setNodeBusy(false)
+    }
+  }
+
   // Save API key → set in runtime + append to profile file
   const handleSaveKey = async () => {
     if (!apiKey.trim()) return
@@ -602,6 +633,61 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               {updateMsg}
             </p>
           )}
+        </div>
+
+        {/* ── Node.js Runtime ─────────────────────── */}
+        <div className="mb-4 p-3 rounded-xl bg-surface2/50 border border-white/5">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-mono font-semibold text-muted">Node.js Runtime</p>
+            <button onClick={loadNode} disabled={nodeBusy}
+              className="flex items-center gap-1 text-xs font-mono text-accent hover:text-accent/80 cursor-pointer transition-colors disabled:opacity-40">
+              <RefreshCw className={cn('w-3 h-3', nodeBusy && 'animate-spin')} /> Re-scan
+            </button>
+          </div>
+
+          <p className="text-[11px] font-mono text-muted/70 mb-2 leading-relaxed">
+            Chat (Agent SDK) butuh Node ≥ 18. Versi lama (mis. v16) menyebabkan error “object not disposable”.
+          </p>
+
+          <div className="flex items-center justify-between text-xs font-mono mb-2">
+            <span className="text-muted/70">Sedang dipakai</span>
+            <span className="text-text">
+              {nodeSetting?.version ?? '—'}{nodeSetting?.selected == null ? ' · Auto' : ''}
+            </span>
+          </div>
+
+          {/* Auto option */}
+          <button onClick={() => handleSelectNode(null)} disabled={nodeBusy}
+            className={cn('w-full mb-1 px-3 py-2 rounded-lg text-left text-xs font-mono transition-colors cursor-pointer disabled:opacity-40',
+              nodeSetting?.selected == null
+                ? 'bg-accent/10 text-accent border border-accent/30'
+                : 'bg-surface2 text-text hover:bg-surface2/70 border border-white/5')}>
+            <span className="font-semibold">Auto</span> <span className="text-muted/70">— pilih versi terbaru otomatis</span>
+          </button>
+
+          {/* Detected nodes */}
+          <div className="space-y-1 max-h-44 overflow-y-auto">
+            {nodeList.map(n => {
+              const active = nodeSetting?.selected === n.path
+              return (
+                <button key={n.path} onClick={() => handleSelectNode(n.path)} disabled={nodeBusy || !n.recommended}
+                  className={cn('w-full px-3 py-2 rounded-lg text-left transition-colors cursor-pointer disabled:cursor-not-allowed',
+                    active ? 'bg-accent/10 border border-accent/30' : 'bg-surface2 hover:bg-surface2/70 border border-white/5',
+                    !n.recommended && 'opacity-50')}>
+                  <div className="flex items-center justify-between">
+                    <span className={cn('text-xs font-mono font-semibold', active ? 'text-accent' : 'text-text')}>{n.version}</span>
+                    {!n.recommended
+                      ? <span className="text-[10px] font-mono text-red-400">terlalu lama</span>
+                      : active ? <Check className="w-3 h-3 text-accent" /> : null}
+                  </div>
+                  <p className="text-[10px] font-mono text-muted/60 break-all mt-0.5">{n.path}</p>
+                </button>
+              )
+            })}
+            {nodeList.length === 0 && (
+              <p className="text-xs font-mono text-muted/60">Tidak ada Node terdeteksi.</p>
+            )}
+          </div>
         </div>
 
         {/* ── Claude CLI Binary ───────────────────── */}

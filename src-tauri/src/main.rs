@@ -18,6 +18,7 @@ use commands::{
         list_github_skills, rescan_library, set_api_key,
     },
     project::{create_project, delete_project, get_projects, list_directory, read_contract, read_file, touch_project, write_contract, write_file},
+    settings::{get_node_setting, list_node_versions, set_node_path},
     terminal::{is_pty_running, resize_pty, start_pty, stop_pty, write_pty},
 };
 use auth_manager::AuthManager;
@@ -147,8 +148,10 @@ fn main() {
             let binary = scanner::detect_claude_binary();
             *app_state.claude_binary.write() = binary.clone();
 
-            // Configure Agent SDK sidecar (Node + script + claude path + env)
-            let node = sidecar_manager::detect_node_binary();
+            // Configure Agent SDK sidecar (Node + script + claude path + env).
+            // A user-selected Node (Settings) overrides auto-detection.
+            let node = commands::settings::load_node_override()
+                .or_else(sidecar_manager::detect_node_binary);
             let script = sidecar_manager::detect_sidecar_script();
             let env_vec: Vec<(String, String)> = shell_env.into_iter().collect();
             sidecar_manager.configure(node, script, binary, env_vec);
@@ -198,6 +201,10 @@ fn main() {
             send_chat_stream,
             respond_permission,
             interrupt_chat,
+            // Node.js settings (sidecar runtime)
+            list_node_versions,
+            get_node_setting,
+            set_node_path,
             // PTY terminal (real embedded claude CLI)
             start_pty,
             write_pty,

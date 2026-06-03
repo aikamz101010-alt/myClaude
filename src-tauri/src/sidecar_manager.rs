@@ -176,6 +176,20 @@ impl SidecarManager {
         let cmd = json!({ "cmd": "interrupt", "chatId": chat_id });
         self.write_command(app, cmd)
     }
+
+    /// The Node binary currently configured for the sidecar.
+    pub fn current_node_path(&self) -> Option<String> {
+        self.node_path.lock().clone()
+    }
+
+    /// Change which Node binary runs the sidecar. Kills the running process so the
+    /// next prompt respawns it with the new Node.
+    pub fn set_node_path(&self, path: Option<String>) {
+        *self.node_path.lock() = path;
+        if let Some(mut proc) = self.inner.lock().take() {
+            let _ = proc.child.kill();
+        }
+    }
 }
 
 /// Normalize sidecar event (camelCase + new kinds) → frontend ChatStreamEvent shape.
@@ -220,8 +234,37 @@ fn normalize_event(ev: &Value) -> Value {
 }
 
 /// Detect a usable `node` binary (cross-platform).
+///
+/// The Claude Agent SDK uses disposable resources (`Symbol.asyncDispose`) and
+/// requires Node >= 18; older Node (e.g. a stale Homebrew v16 in /usr/local/bin)
+/// throws "object not disposable". So we don't just take the first node on PATH:
+/// we inspect every candidate and pick the NEWEST version that meets the minimum.
 pub fn detect_node_binary() -> Option<String> {
-    crate::platform::which("node").or_else(|| crate::platform::fallback_binary("node"))
+    const MIN_MAJOR: u32 = 18;
+    let candidates = crate::platform::node_candidates();
+
+    // Pick the highest (major, minor) that is >= MIN_MAJOR.
+    let mut best: Option<((u32, u32), String)> = None;
+    for path in &candidates {
+        if let Some(ver) = crate::platform::node_version(path) {
+            if ver.0 < MIN_MAJOR {
+                continue;
+            }
+            let better = best.as_ref().map_or(true, |(bv, _)| ver > *bv);
+            if better {
+                best = Some((ver, path.clone()));
+            }
+        }
+    }
+    if let Some((_, path)) = best {
+        return Some(path);
+    }
+
+    // Best-effort fallback: nothing met the minimum (or versions weren't parseable).
+    // Return the first existing candidate so the sidecar can at least try and
+    // surface a clear error, rather than reporting "Node.js not found".
+    candidates.into_iter().next()
+        .or_else(|| crate::platform::fallback_binary("node"))
 }
 
 /// Resolve the sidecar script path (dev: project/sidecar/agent.mjs).
