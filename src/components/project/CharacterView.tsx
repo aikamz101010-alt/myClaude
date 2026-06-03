@@ -6,7 +6,7 @@ import { Volume2, VolumeX, Loader2, Bot, Settings, X } from 'lucide-react'
 import { useSessionStore } from '@/store/sessionStore'
 import { useAvatarStore } from '@/store/avatarStore'
 import { lipSync } from '@/lib/lipsync'
-import { speakMessageOnce, stopSpeaking } from '@/lib/speak'
+import { enqueueSpeech, resetNarration, markNarrated, stopSpeaking, sanitizeForSpeech } from '@/lib/speak'
 import { cn } from '@/lib/utils'
 import { ChatInput, type AttachedFile } from './ChatInput'
 import { AvatarVoiceSettings } from '@/components/settings/AvatarVoiceSettings'
@@ -224,39 +224,45 @@ function VrmStage({ url, zoom, thinkingRef, activeRef, interactiveRef, onStatus 
           : 0
 
         // ── Arm pose targets per mode (lerped → smooth transitions) ──
+        // Note on clipping: forearms are lifted FORWARD (negative upper-arm X +
+        // strong elbow bend) so the hands sit in front of the torso, clear of the
+        // skirt mesh, instead of hanging down into it.
         const armSwing = moving ? Math.sin(legPhase) * 0.25 : 0
         let lUAz: number, lUAx: number, rUAz: number, rUAx: number, lLAz: number, rLAz: number
         if (thinking) {
           // Pondering: right hand up toward the chin, left arm relaxed down.
           rUAz = 0.95; rUAx = -0.35 + Math.sin(time * 0.8) * 0.03; rLAz = 1.45
-          lUAz = -1.32; lUAx = 0; lLAz = -0.25
+          lUAz = -1.30; lUAx = 0.08; lLAz = -0.30
         } else if (speaking) {
-          // Talking: arms come forward off the body and clearly gesticulate.
-          lUAz = -1.02 + Math.sin(time * 2.6) * 0.20
-          lUAx = -0.32 + Math.sin(time * 3.0) * 0.38
-          rUAz = 1.02 + Math.sin(time * 2.6 + 1.2) * 0.20
-          rUAx = -0.32 + Math.sin(time * 3.2 + 0.6) * 0.38
-          lLAz = -0.60 - Math.abs(Math.sin(time * 2.6)) * 0.55
-          rLAz = 0.60 + Math.abs(Math.sin(time * 3.2 + 0.6)) * 0.55
+          // Talking: forearms lifted in front of the torso, with varied
+          // multi-frequency motion so it never looks like a fixed loop.
+          const style = 0.5 + 0.5 * Math.sin(time * 0.27)                       // alternates lead hand
+          const beat = Math.sin(time * 2.4) * (0.75 + 0.25 * Math.sin(time * 0.9)) // varied amplitude
+          lUAz = -1.12 + beat * 0.12
+          lUAx = -0.55 - style * 0.18 + Math.sin(time * 2.1 + 0.7) * 0.24
+          rUAz = 1.12 - beat * 0.12
+          rUAx = -0.55 - (1 - style) * 0.18 + Math.sin(time * 2.6 + 1.9) * 0.24
+          lLAz = -0.85 - Math.abs(Math.sin(time * 2.1)) * 0.45
+          rLAz = 0.85 + Math.abs(Math.sin(time * 2.6 + 1.0)) * 0.45
         } else {
-          // Idle: arms down with a subtle sway + walk swing + occasional gesture.
-          lUAz = -1.40 + Math.sin(time * 0.9) * 0.04
-          lUAx = Math.sin(time * 0.7) * 0.05 - armSwing
-          rUAz = 1.40 + Math.sin(time * 0.9 + 1.0) * 0.04
-          rUAx = Math.sin(time * 0.7 + 0.5) * 0.05 + armSwing
-          lLAz = -0.20; rLAz = 0.20
-          if (idleGestureSide === 'r') { rUAx -= idleG * 0.6; rLAz += idleG * 0.6 }
-          else { lUAx -= idleG * 0.6; lLAz -= idleG * 0.6 }
+          // Idle: arms rest slightly forward & outward so hands clear the skirt.
+          lUAz = -1.35 + Math.sin(time * 0.9) * 0.04
+          lUAx = 0.08 + Math.sin(time * 0.7) * 0.05 - armSwing
+          rUAz = 1.35 + Math.sin(time * 0.9 + 1.0) * 0.04
+          rUAx = 0.08 + Math.sin(time * 0.7 + 0.5) * 0.05 + armSwing
+          lLAz = -0.18; rLAz = 0.18
+          if (idleGestureSide === 'r') { rUAx -= idleG * 0.7; rLAz += idleG * 0.6 }
+          else { lUAx -= idleG * 0.7; lLAz -= idleG * 0.6 }
         }
         // Faster lerp while speaking so the gesticulation is clearly visible.
-        const armK = speaking ? 0.32 : 0.18
+        const armK = speaking ? 0.30 : 0.16
         lerpRot(lUA, 'z', lUAz, armK); lerpRot(lUA, 'x', lUAx, armK)
         lerpRot(rUA, 'z', rUAz, armK); lerpRot(rUA, 'x', rUAx, armK)
         lerpRot(lLA, 'z', lLAz, armK); lerpRot(rLA, 'z', rLAz, armK)
 
-        // Hands/wrists: subtle idle motion + clear flicks while speaking.
+        // Hands/wrists: subtle idle motion + varied flicks while speaking.
         const hw = interactive ? 1 : 0
-        const speakHand = speaking ? Math.sin(time * 5) * 0.22 : 0
+        const speakHand = speaking ? Math.sin(time * 4.2) * 0.16 + Math.sin(time * 6.7) * 0.06 : 0
         const lHand = bone('leftHand'); const rHand = bone('rightHand')
         if (lHand) lHand.rotation.z = Math.sin(time * 1.7) * 0.06 * hw + speakHand - (idleGestureSide === 'l' ? idleG * 0.25 : 0)
         if (rHand) rHand.rotation.z = Math.sin(time * 1.9 + 1) * 0.06 * hw - speakHand + (idleGestureSide === 'r' ? idleG * 0.25 : 0)
@@ -362,29 +368,67 @@ function Subtitle({ side }: { side: 'left' | 'right' }) {
   )
 }
 
-// ── Auto-speak: narrate each completed assistant reply (when panel active) ────
+// ── Streaming narration: speak sentences AS they arrive (low latency) ─────────
+// Instead of waiting for the whole reply to finish, narrate each completed
+// sentence while Claude is still streaming, then flush the remainder when done.
 
-function useAutoSpeak(chatId: string | null, active: boolean) {
+function useStreamNarration(chatId: string | null, active: boolean) {
   const status = useSessionStore(s => (chatId ? s.chats[chatId]?.status : undefined))
   const messages = useSessionStore(s => (chatId ? s.chats[chatId]?.messages : undefined))
   const autoSpeak = useAvatarStore(s => s.autoSpeak)
+  const narrationLimit = useAvatarStore(s => s.narrationLimit)
+  const msgIdRef = useRef<string | null>(null)
+  const spokenRef = useRef(0)   // chars of sanitized text already enqueued
 
   useEffect(() => {
-    if (!active || !autoSpeak || status !== 'idle' || !messages?.length) return
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]
-      if (m.role !== 'assistant') continue
-      const text = (m.blocks ?? [])
-        .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-        .map(b => b.text)
-        .join(' ')
-        .trim() || m.content
-      if (!text) return
-      // Global dedup → no double narration, no re-speak on tab switch / remount.
-      speakMessageOnce(m.id, text)
-      return
+    if (!active || !autoSpeak || !messages?.length) return
+    const msgs = messages
+    let m: (typeof msgs)[number] | null = null
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'assistant') { m = msgs[i]; break }
     }
-  }, [status, messages, autoSpeak, active])
+    if (!m) return
+
+    // New assistant message → reset the narration queue and progress.
+    if (m.id !== msgIdRef.current) {
+      const firstSight = msgIdRef.current === null
+      msgIdRef.current = m.id
+      resetNarration()
+      markNarrated(m.id)   // so the floating avatar won't re-speak it
+      if (firstSight && status === 'idle') {
+        // Panel opened on an already-finished reply → don't re-read it aloud.
+        spokenRef.current = Number.MAX_SAFE_INTEGER
+        return
+      }
+      spokenRef.current = 0
+    }
+
+    const raw = (m.blocks ?? [])
+      .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+      .map(b => b.text)
+      .join(' ')
+      .trim() || m.content
+    let full = sanitizeForSpeech(raw)            // unlimited clean prose
+    if (narrationLimit > 0) full = full.slice(0, narrationLimit)
+
+    // While streaming, only narrate up to the last completed sentence; once the
+    // reply is done, flush everything that remains.
+    let upTo: number
+    if (status === 'idle') {
+      upTo = full.length
+    } else {
+      const b = Math.max(
+        full.lastIndexOf('. '), full.lastIndexOf('! '), full.lastIndexOf('? '),
+        full.lastIndexOf('… '), full.lastIndexOf('.\n'), full.lastIndexOf('\n\n'),
+      )
+      upTo = b >= 0 ? b + 1 : 0
+    }
+    if (upTo > spokenRef.current) {
+      const piece = full.slice(spokenRef.current, upTo).trim()
+      spokenRef.current = upTo
+      if (piece) enqueueSpeech(piece)
+    }
+  }, [status, messages, autoSpeak, active, narrationLimit])
 }
 
 // ── Transcript: the conversation log, streams the reply live ───────────────────
@@ -442,25 +486,43 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
   const chat = chatId ? chats[chatId] : null
   const streaming = chat?.status === 'streaming'
 
+  // Show the thinking pose IMMEDIATELY on submit (before the stream status flips),
+  // for both typed and voice input.
+  const [pending, setPending] = useState(false)
+  const thinking = pending || !!streaming
+  useEffect(() => {
+    if (!streaming) return
+    setPending(false)   // stream started → it drives the thinking state now
+  }, [streaming])
+
   // Live state read by the render loop (refs avoid re-creating the three.js scene).
   const thinkingRef = useRef(false)
-  thinkingRef.current = !!streaming   // waiting for / receiving a reply → thinking pose, no walking
+  thinkingRef.current = thinking   // waiting for / receiving a reply → thinking pose, no walking
   const activeRef = useRef(active)
   activeRef.current = active
   const interactiveRef = useRef(interactive)
   interactiveRef.current = interactive
 
-  useAutoSpeak(chatId, active)
+  useStreamNarration(chatId, active)
 
-  // Stop narration when leaving the panel.
+  // Stop narration when leaving the panel; also stop if the tab is hidden.
+  useEffect(() => { if (!active) resetNarration() }, [active])
   useEffect(() => () => stopSpeaking(), [])
 
   const handleSend = (text: string, files: AttachedFile[]) => {
     if (!chatId) return
+    setPending(true)   // react instantly: think now, answer when Claude responds
     const fileRefs = files.map(f => `@${f.path}`).join(' ')
     const full = fileRefs ? `${fileRefs}\n${text}` : text
     sendMessageStream(chatId, full)
   }
+
+  // Safety: clear a stuck pending state if no stream starts within a few seconds.
+  useEffect(() => {
+    if (!pending) return
+    const t = setTimeout(() => setPending(false), 8000)
+    return () => clearTimeout(t)
+  }, [pending])
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden">
@@ -475,7 +537,7 @@ export function CharacterView({ chatId, slashCommands, active = true }: Props) {
           <Subtitle side={side} />
 
           {/* Thinking indicator */}
-          {streaming && (
+          {thinking && (
             <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 rounded-full bg-bg/80 backdrop-blur border border-white/10 px-3 py-1.5">
               <span className="flex gap-1">
                 {[0, 150, 300].map(d => <span key={d} className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: `${d}ms` }} />)}

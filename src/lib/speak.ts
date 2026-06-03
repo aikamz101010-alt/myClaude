@@ -125,9 +125,12 @@ export async function speak(text: string): Promise<void> {
   }
 }
 
-/** Stop any in-progress narration. */
+/** Stop any in-progress narration (both one-shot and streaming queue). */
 export function stopSpeaking(): void {
   speakSeq++          // invalidate any running speak() loop
+  qGen++              // invalidate the streaming queue
+  queue.length = 0
+  pumping = false
   lipSync.stop()
 }
 
@@ -139,4 +142,47 @@ export function speakMessageOnce(id: string, text: string): void {
   if (id === lastSpokenId) return
   lastSpokenId = id
   void speak(text)
+}
+
+/** Mark a message id as already narrated (so other narrators won't repeat it). */
+export function markNarrated(id: string): void {
+  lastSpokenId = id
+}
+
+// ── Streaming narration queue ─────────────────────────────────────────────────
+// Speaks pieces of text as they arrive (sentence-by-sentence while Claude is
+// still streaming), so the avatar starts answering almost immediately instead of
+// waiting for the whole reply. Pieces are chunked and played in order.
+let qGen = 0
+const queue: string[] = []
+let pumping = false
+
+/** Clear the queue and stop current narration — call when a new reply starts. */
+export function resetNarration(): void {
+  qGen++
+  queue.length = 0
+  pumping = false
+  lipSync.stop()
+}
+
+/** Append text to the narration queue; starts playback if idle. */
+export function enqueueSpeech(text: string): void {
+  const t = text.trim()
+  if (!t) return
+  for (const c of chunkText(t)) queue.push(c)
+  if (!pumping) void pumpQueue()
+}
+
+async function pumpQueue(): Promise<void> {
+  pumping = true
+  const myGen = qGen
+  while (queue.length) {
+    if (myGen !== qGen) return
+    const chunk = queue.shift() as string
+    let b64 = ''
+    try { b64 = await synth(chunk) } catch { /* skip on failure */ }
+    if (myGen !== qGen) return
+    if (b64) await playChunk(b64, chunk)
+  }
+  pumping = false
 }
