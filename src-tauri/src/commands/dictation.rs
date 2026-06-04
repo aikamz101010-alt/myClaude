@@ -202,7 +202,7 @@ fn ensure_ctx(app: &AppHandle, state: &Dictation) -> Result<Arc<WhisperContext>,
             return Err("model_missing".into());
         }
         let c = WhisperContext::new_with_params(
-            &path.to_string_lossy(),
+            &path,
             WhisperContextParameters::default(),
         )
         .map_err(|e| format!("failed to load model: {e}"))?;
@@ -504,11 +504,16 @@ fn transcribe(ctx: &WhisperContext, audio: &[f32], lang: &str) -> Result<String,
     params.set_print_timestamps(false);
 
     st.full(params, audio).map_err(|e| format!("whisper full: {e}"))?;
-    let n = st.full_n_segments().map_err(|e| format!("n_segments: {e}"))?;
+    // whisper-rs 0.16: `full_n_segments` returns `c_int` directly, and segment
+    // text is read via `get_segment(i).to_str()` (the old `full_get_segment_text`
+    // accessor was removed).
+    let n = st.full_n_segments();
     let mut text = String::new();
     for i in 0..n {
-        if let Ok(seg) = st.full_get_segment_text(i) {
-            text.push_str(&seg);
+        if let Some(seg) = st.get_segment(i) {
+            if let Ok(s) = seg.to_str() {
+                text.push_str(s);
+            }
         }
     }
     Ok(text.trim().to_string())

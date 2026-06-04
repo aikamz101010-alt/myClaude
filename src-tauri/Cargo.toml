@@ -39,7 +39,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 base64 = "0.22"
 cpal = "0.15"
-whisper-rs = "0.14"
+whisper-rs = "0.16"
 msedge-tts = "0.4.0"
 rustls = { version = "0.23", features = ["ring"] }
 

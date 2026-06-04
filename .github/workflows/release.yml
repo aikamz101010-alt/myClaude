@@ -50,6 +50,16 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # whisper.cpp's GGML_NATIVE auto-detection mixes `-mcpu=native` (which
+      # defines __ARM_FEATURE_MATMUL_INT8) with a `+noi8mm` codegen flag on the
+      # hosted Apple-Silicon runner, so ggml-cpu-quants.c calls the i8mm intrinsic
+      # `vmmlaq_s32` from a TU compiled without i8mm → build fails. Forcing
+      # GGML_NATIVE=OFF skips the probe and builds a clean ARM baseline.
+      # (whisper-rs-sys ≥0.15 forwards GGML_* env vars to CMake.)
+      - name: Force GGML baseline on Apple Silicon
+        if: matrix.rust-target == 'aarch64-apple-darwin'
+        run: echo "GGML_NATIVE=OFF" >> "$GITHUB_ENV"
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         with:
