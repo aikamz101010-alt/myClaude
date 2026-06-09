@@ -10,7 +10,10 @@ mod state;
 
 use commands::{
     agent::{interrupt_chat, respond_permission, send_chat_stream},
-    avatar::{list_voices, synthesize_edge, synthesize_speech},
+    avatar::{
+        list_voices, piper_download, piper_status, synthesize_edge, synthesize_piper,
+        synthesize_speech,
+    },
     dictation::{
         dictation_download_model, dictation_model_status, dictation_start, dictation_start_stream,
         dictation_stop, dictation_stop_stream, Dictation,
@@ -218,6 +221,9 @@ fn main() {
             // Voice synthesis for the talking avatar
             synthesize_speech,
             synthesize_edge,
+            synthesize_piper,
+            piper_status,
+            piper_download,
             list_voices,
             // Speech-to-text (mic input, cross-platform Whisper)
             dictation_start,

@@ -68,9 +68,29 @@ function synthEdge(text: string): Promise<string> {
   return invoke<string>('synthesize_edge', { text, voice: EDGE_VOICE[effectiveGender()][voiceLang], rate: null })
 }
 
-/** Synthesize one piece of text via the active provider (Edge → local fallback). */
+/** Piper offline-neural synthesis (Bahasa Indonesia, no internet) → base64 WAV. */
+function synthPiper(text: string): Promise<string> {
+  const { rate } = useAvatarStore.getState()
+  return invoke<string>('synthesize_piper', { text, rate: rate || null })
+}
+
+/** Synthesize one piece of text via the active provider, with graceful fallback:
+ *  piper → edge → local, and edge → local. */
 async function synth(text: string): Promise<string> {
   const { provider } = useAvatarStore.getState()
+  if (provider === 'piper') {
+    try {
+      return await synthPiper(text)
+    } catch (e) {
+      console.warn('[avatar] Piper TTS failed, falling back to Edge:', e)
+      try {
+        return await synthEdge(text)
+      } catch (e2) {
+        console.warn('[avatar] Edge TTS failed, falling back to local:', e2)
+        return await synthLocal(text)
+      }
+    }
+  }
   if (provider === 'edge') {
     try {
       return await synthEdge(text)

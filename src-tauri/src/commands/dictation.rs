@@ -340,7 +340,10 @@ pub async fn dictation_start_stream(
 
 /// Stop a live dictation session and return the final accumulated transcript.
 #[tauri::command]
-pub async fn dictation_stop_stream(state: State<'_, Arc<Dictation>>) -> Result<String, String> {
+pub async fn dictation_stop_stream(
+    app: AppHandle,
+    state: State<'_, Arc<Dictation>>,
+) -> Result<String, String> {
     let sess = state.stream.lock().unwrap().take();
     let Some(mut sess) = sess else {
         return Ok(String::new());
@@ -371,7 +374,29 @@ pub async fn dictation_stop_stream(state: State<'_, Arc<Dictation>>) -> Result<S
     }
 
     let text = sess.result.lock().unwrap().clone();
-    Ok(text)
+    if !text.trim().is_empty() {
+        return Ok(text);
+    }
+
+    // Fallback: the VAD never committed a phrase (e.g. quiet mic, threshold too
+    // high), but the user did speak. Transcribe the FULL captured buffer so we
+    // never silently return nothing when there is audio to read.
+    let raw = std::mem::take(&mut *sess.cap.samples.lock().unwrap());
+    let sample_rate = sess.cap.sample_rate;
+    if raw.len() < (sample_rate as usize / 5) {
+        return Ok(String::new()); // < 0.2s of audio — genuinely nothing
+    }
+    eprintln!(
+        "[dictation] stream produced no committed text; transcribing full buffer ({} samples @ {}Hz)",
+        raw.len(),
+        sample_rate
+    );
+    let audio = resample_to_16k(&raw, sample_rate);
+    let ctx = ensure_ctx(&app, &state)?;
+    let text = tokio::task::spawn_blocking(move || transcribe(&ctx, &audio, "id"))
+        .await
+        .map_err(|e| format!("fallback transcription task failed: {e}"))??;
+    Ok(clean_transcript(&text))
 }
 
 /// Processor loop: segments the live mic buffer on silence, transcribing each
@@ -399,7 +424,8 @@ fn run_processor(
     let mut last_voice = 0usize;
     let mut phrase_start = 0usize;
     let mut any_voice = false;
-    let mut noise_floor = 0.01f32;
+    let mut noise_floor = 0.005f32;
+    let mut peak_rms = 0.0f32; // diagnostic: loudest frame seen this session
     let mut committed = String::new();
     let mut last_preview_at = 0usize;
     let mut submitted = false;
@@ -419,7 +445,13 @@ fn run_processor(
             while scan_pos + frame <= buf.len() {
                 let w = &buf[scan_pos..scan_pos + frame];
                 let rms = (w.iter().map(|x| x * x).sum::<f32>() / frame as f32).sqrt();
-                let threshold = (noise_floor * 2.5).max(0.012);
+                if rms > peak_rms {
+                    peak_rms = rms;
+                }
+                // Speech is detected when a frame is clearly above the rolling
+                // noise floor. Lower floor (0.006) so quiet mics (AirPods, low
+                // input gain) still register; the relative term handles noisy ones.
+                let threshold = (noise_floor * 2.2).max(0.006);
                 if rms > threshold {
                     last_voice = scan_pos + frame;
                     any_voice = true;
@@ -485,6 +517,17 @@ fn run_processor(
         }
 
         if stopping {
+            eprintln!(
+                "[dictation] processor stop: peak_rms={:.4} any_voice={} committed_len={}",
+                peak_rms,
+                any_voice,
+                committed.len()
+            );
+            if peak_rms < 0.002 {
+                eprintln!(
+                    "[dictation] WARNING: mic appears silent (peak_rms≈0). Check microphone permission/device."
+                );
+            }
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(180));

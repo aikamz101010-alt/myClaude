@@ -10,7 +10,7 @@ export type AvatarZoom = 'full' | 'three' | 'half' | 'head'
 interface AvatarStore {
   enabled: boolean          // panel visible
   autoSpeak: boolean        // speak each assistant reply automatically
-  provider: 'edge' | 'local' // 'edge' = realistic neural (free, needs internet); 'local' = macOS say (offline)
+  provider: 'edge' | 'local' | 'piper' // 'edge' = realistic neural (free, needs internet); 'local' = macOS say (offline); 'piper' = offline neural (Bahasa Indonesia)
   voiceLang: 'id' | 'en' | 'multi' // spoken language: native Indonesian, native English, or auto multilingual
   voice: string | null      // macOS voice name ('' / null = system default)
   edgeVoice: string         // Edge neural voice short-name (e.g. id-ID-GadisNeural)
@@ -37,7 +37,7 @@ interface AvatarStore {
   setEnabled: (v: boolean) => void
   toggleEnabled: () => void
   setAutoSpeak: (v: boolean) => void
-  setProvider: (p: 'edge' | 'local') => void
+  setProvider: (p: 'edge' | 'local' | 'piper') => void
   setVoiceLang: (v: 'id' | 'en' | 'multi') => void
   setVoice: (v: string | null) => void
   setEdgeVoice: (v: string) => void

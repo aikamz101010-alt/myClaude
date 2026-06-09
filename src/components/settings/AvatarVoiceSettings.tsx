@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useAvatarStore, type AvatarZoom } from '@/store/avatarStore'
 import { cn } from '@/lib/utils'
-import { Bot, Mic, Download, Check, Loader2, Wifi, WifiOff } from 'lucide-react'
+import { Bot, Mic, Download, Check, Loader2, Wifi, WifiOff, Sparkles } from 'lucide-react'
 
 type ModelState = 'unknown' | 'missing' | 'ready' | 'downloading'
 
@@ -36,15 +36,26 @@ export function AvatarVoiceSettings() {
   const [model, setModel] = useState<ModelState>('unknown')
   const [pct, setPct] = useState(0)
 
+  // Piper (offline-neural Indonesian voice) download state.
+  const [piper, setPiper] = useState<ModelState>('unknown')
+  const [piperPct, setPiperPct] = useState(0)
+  const [piperStage, setPiperStage] = useState<string>('')
+
   useEffect(() => {
     invoke<{ present: boolean }>('dictation_model_status')
       .then(s => setModel(s.present ? 'ready' : 'missing'))
       .catch(() => setModel('missing'))
+    invoke<{ binary_present: boolean; model_present: boolean }>('piper_status')
+      .then(s => setPiper(s.binary_present && s.model_present ? 'ready' : 'missing'))
+      .catch(() => setPiper('missing'))
   }, [])
 
   useEffect(() => {
     const un = listen<{ percent: number }>('dictation:download', e => setPct(e.payload.percent))
-    return () => { un.then(f => f()) }
+    const unP = listen<{ percent: number; stage: string }>('piper:download', e => {
+      setPiperPct(e.payload.percent); setPiperStage(e.payload.stage)
+    })
+    return () => { un.then(f => f()); unP.then(f => f()) }
   }, [])
 
   const downloadModel = async () => {
@@ -54,6 +65,17 @@ export function AvatarVoiceSettings() {
       setModel('ready')
     } catch {
       setModel('missing')
+    }
+  }
+
+  const downloadPiper = async () => {
+    setPiper('downloading'); setPiperPct(0); setPiperStage('binary')
+    try {
+      await invoke('piper_download')
+      setPiper('ready')
+      setProvider('piper') // switch the avatar to Piper once it's ready
+    } catch {
+      setPiper('missing')
     }
   }
 
@@ -81,6 +103,11 @@ export function AvatarVoiceSettings() {
       <div>
         <p className="text-[11px] text-text mb-1.5">Mode suara</p>
         <div className="flex gap-1">
+          <button onClick={() => setProvider('piper')}
+            className={cn('flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors border',
+              provider === 'piper' ? 'bg-accent/15 text-accent border-accent/40' : 'text-muted hover:text-text border-white/10')}>
+            <Sparkles className="w-3 h-3" /> Piper
+          </button>
           <button onClick={() => setProvider('edge')}
             className={cn('flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors border',
               provider === 'edge' ? 'bg-accent/15 text-accent border-accent/40' : 'text-muted hover:text-text border-white/10')}>
@@ -93,10 +120,17 @@ export function AvatarVoiceSettings() {
           </button>
         </div>
         <p className="text-[10px] text-muted/60 mt-1">
-          {provider === 'edge'
+          {provider === 'piper'
+            ? 'Piper — neural Bahasa Indonesia, tanpa internet (perlu unduh model di bawah)'
+            : provider === 'edge'
             ? 'Neural — natural, butuh internet'
             : 'Damayanti (macOS) — tanpa internet, lebih robotik'}
         </p>
+        {provider === 'piper' && piper !== 'ready' && (
+          <p className="text-[10px] text-amber-400/80 mt-1">
+            Model Piper belum terunduh — suara sementara memakai mode lain sampai diunduh.
+          </p>
+        )}
       </div>
 
       {/* Spoken language */}
@@ -236,6 +270,40 @@ export function AvatarVoiceSettings() {
             <span className={cn('absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all', interactive ? 'left-4' : 'left-0.5')} />
           </span>
         </button>
+      </div>
+
+      {/* Piper voice model (offline neural, Bahasa Indonesia) */}
+      <div className="pt-1 border-t border-white/5">
+        <p className="text-[11px] text-text mb-1.5 flex items-center gap-1.5">
+          <Sparkles className="w-3 h-3 text-accent" /> Model suara Piper (neural, offline)
+        </p>
+        {piper === 'ready' && (
+          <p className="flex items-center gap-1.5 text-[11px] text-accent font-mono">
+            <Check className="w-3.5 h-3.5" /> Terpasang &amp; siap dipakai
+          </p>
+        )}
+        {piper === 'missing' && (
+          <button onClick={downloadPiper}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-mono bg-surface2 border border-white/10 text-text hover:text-accent hover:border-accent/30 cursor-pointer transition-colors">
+            <Download className="w-3.5 h-3.5" /> Unduh Piper + suara Indonesia (~105 MB)
+          </button>
+        )}
+        {piper === 'downloading' && (
+          <p className="flex items-center gap-1.5 text-[11px] text-muted font-mono">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            {piperStage === 'binary' ? 'Mengunduh Piper…'
+              : piperStage === 'libs' ? 'Mengunduh pustaka…'
+              : piperStage === 'model' ? 'Mengunduh suara…'
+              : piperStage === 'config' ? 'Menyelesaikan…'
+              : 'Mengunduh…'} {piperPct}%
+          </p>
+        )}
+        {piper === 'unknown' && (
+          <p className="text-[11px] text-muted/60 font-mono">Memeriksa…</p>
+        )}
+        <p className="text-[10px] text-muted/60 mt-1">
+          Suara neural Bahasa Indonesia (id_ID-news_tts) yang berjalan offline. Sekali unduh.
+        </p>
       </div>
 
       {/* Mic dictation model */}

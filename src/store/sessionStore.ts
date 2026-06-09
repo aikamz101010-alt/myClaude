@@ -234,7 +234,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       return {
         chats: {
           ...s.chats,
-          [chatId]: { ...chat, permissionMode: mode, messages: [...chat.messages, marker] },
+          // Keep `yolo` in sync with the mode — they are one and the same setting
+          // (YOLO = bypassPermissions). Two separate fields would otherwise drift,
+          // e.g. the Character tab resets the mode to 'default' while `yolo` stays
+          // true → the YOLO button shows ON but tools still prompt.
+          [chatId]: { ...chat, permissionMode: mode, yolo: mode === 'bypassPermissions', messages: [...chat.messages, marker] },
         },
       }
     }),
